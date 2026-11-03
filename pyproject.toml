@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tgmt5"
+version = "0.1.0"
+description = "Telegram -> MetaTrader 5 risk-controlled copy trading desktop application (DEMO accounts only)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = [
+    "pydantic>=2.7,<3",
+    "SQLAlchemy>=2.0.30,<3",
+    "alembic>=1.13,<2",
+    "telethon>=1.36,<2",
+    "keyring>=25",
+    "PySide6>=6.7,<7",
+    "qasync>=0.27",
+    # Official MetaQuotes package. Windows-only wheels; the app imports it lazily.
+    "MetaTrader5>=5.0.45; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pyinstaller>=6.6"]
+
+[project.scripts]
+tgmt5 = "tgmt5.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tgmt5 = ["persistence/migrations/*.py", "persistence/migrations/versions/*.py", "persistence/alembic.ini", "ui/assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "demo_e2e: real IC Markets DEMO end-to-end tests (Windows + MT5 terminal + explicit opt-in required)",
+]
+addopts = "-m 'not demo_e2e'"
