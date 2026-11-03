@@ -8,3 +8,9 @@ dist/
 *.egg-info/
 .pytest_cache/
 *.session
+*.sqlite
+*.jsonl
+*.log
+config.local.json
+.env
+secrets*

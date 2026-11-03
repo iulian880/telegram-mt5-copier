@@ -104,7 +104,8 @@ class Database:
     # ------------------------------------------------------------- events
     def log_event(self, level: str, category: str, message: str, data: dict | None = None) -> None:
         with self.session() as s:
-            s.add(AppEventRow(level=level, category=category, message=message[:4000], data=data,
+            from tgmt5.logging_setup import redact
+            s.add(AppEventRow(level=level, category=category, message=redact(message)[:4000], data=data,
                               ts=datetime.now(timezone.utc)))
 
     def recent_events(self, limit: int = 500, level: str | None = None,
