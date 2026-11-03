@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,7 @@ class Database:
         if url.startswith("sqlite"):
             event.listen(self.engine, "connect", _sqlite_pragmas)
         self._factory = sessionmaker(self.engine, expire_on_commit=False, future=True)
+        self._local = threading.local()
         if migrate:
             self.upgrade()
 
@@ -64,7 +66,20 @@ class Database:
 
     @contextmanager
     def session(self) -> Iterator[Session]:
+        """Unit of work. Nested calls on the same thread reuse the outer session.
+
+        SQLite allows one writer at a time; opening a second connection for a nested
+        write (e.g. an audit-log entry inside a trade transaction) would block on the
+        outer transaction's lock.  Re-using the outer session keeps every write of
+        one pipeline step in a single atomic transaction.
+        """
+        outer = getattr(self._local, "session", None)
+        if outer is not None:
+            yield outer
+            outer.flush()
+            return
         s = self._factory()
+        self._local.session = s
         try:
             yield s
             s.commit()
@@ -72,6 +87,7 @@ class Database:
             s.rollback()
             raise
         finally:
+            self._local.session = None
             s.close()
 
     # ------------------------------------------------------------ settings

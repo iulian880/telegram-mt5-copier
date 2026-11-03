@@ -110,6 +110,7 @@ class AppService:
         self._ok_count = 0
         self._last_snapshot_eq = datetime.min.replace(tzinfo=timezone.utc)
         self.last_recovery: RecoveryReport | None = None
+        self.equity_snapshot_seconds = 60
 
     # ------------------------------------------------------------- plumbing
     def subscribe(self, fn: Listener) -> None:
@@ -211,7 +212,7 @@ class AppService:
         if self.engine.gw is not None:
             self.engine.on_tick()
         now = datetime.now(timezone.utc)
-        if now - self._last_snapshot_eq > timedelta(seconds=60):
+        if now - self._last_snapshot_eq > timedelta(seconds=self.equity_snapshot_seconds):
             self._last_snapshot_eq = now
             self._equity_snapshot()
         self._emit("tick", {})

@@ -73,7 +73,7 @@ def _bucket(reason: str) -> str:
     r = (reason or "").lower()
     for key, label in (("spread", "Spread"), ("old", "Stale signal"), ("moved", "Price moved"),
                        ("zone", "Entry zone"), ("risk", "Risk limit"), ("margin", "Margin"),
-                       ("duplicate", "Duplicate"), ("lockout", "Lockout"), ("emergency", "Emergency stop"),
+                       ("duplicate", "Duplicate"), ("frequency", "Trade frequency"), ("unstable", "Connectivity"), ("lockout", "Lockout"), ("emergency", "Emergency stop"),
                        ("concurrent", "Max trades"), ("minimum volume", "Min volume"),
                        ("not confirmed", "Not confirmed"), ("stop loss", "Stop loss"),
                        ("take profit", "Take profit"), ("tp", "Take profit"),

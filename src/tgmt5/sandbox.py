@@ -27,11 +27,11 @@ def make_sandbox_broker() -> FakeMT5Gateway:
     return b
 
 
-def random_walk(b: FakeMT5Gateway) -> None:
+def random_walk(b: FakeMT5Gateway, scale: float = 1.0) -> None:
     for sym, t in list(b.ticks.items()):
         spec = b.specs[sym]
         vol = {"XAUUSD": 0.35, "USDJPY": 0.012}.get(sym, 0.00008)
-        mid = (t.bid + t.ask) / 2 + random.gauss(0, vol)
+        mid = (t.bid + t.ask) / 2 + random.gauss(0, vol * scale)
         half = (t.ask - t.bid) / 2
         b.set_price(sym, round(mid - half, spec.digits), round(mid + half, spec.digits))
 
