@@ -13,4 +13,6 @@ dist/
 *.log
 config.local.json
 .env
-secrets*
+/secrets*
+*.secret
+.secrets/
