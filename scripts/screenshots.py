@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 os.environ.setdefault("TGMT5_SANDBOX_INTERVAL", "2.5")
-os.environ.setdefault("TGMT5_SANDBOX_VOL", "4")
+os.environ.setdefault("TGMT5_SANDBOX_VOL", "2.5")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 import qasync  # noqa: E402
@@ -23,6 +23,11 @@ async def run(out: Path, seconds: float) -> None:
     from tgmt5.ui.main_window import MainWindow
     svc = build_service(Path(tempfile.mkdtemp()), sandbox=True)
     svc.equity_snapshot_seconds = 3
+    svc.config.risk.max_trades_per_hour = 60
+    svc.config.risk.max_concurrent_trades = 8
+    svc.config.risk.max_total_open_risk_pct = 6
+    svc.config.risk.max_correlated_risk_pct = 5
+    svc.config.notifications.desktop = False
     win = MainWindow(svc)
     win.resize(1560, 1000)
     win.show()

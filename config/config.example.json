@@ -1,0 +1,40 @@
+{
+  "theme": "dark",
+  "risk": {
+    "sizing_mode": "PCT_EQUITY",
+    "risk_percent": 0.5,
+    "max_risk_per_signal_pct": 1.0,
+    "max_total_open_risk_pct": 3.0,
+    "max_daily_loss_pct": 3.0,
+    "max_drawdown_pct": 10.0,
+    "max_consecutive_losses": 4,
+    "max_concurrent_trades": 5,
+    "max_trades_per_hour": 6,
+    "max_lot_per_order": 2.0,
+    "max_lots_per_symbol": 5.0,
+    "max_margin_usage_pct": 30.0,
+    "min_free_margin": 100.0,
+    "max_spread_sl_fraction": 0.15,
+    "max_entry_deviation_sl_fraction": 0.3,
+    "max_slippage_points": 30,
+    "symbol_whitelist": [],
+    "symbol_blacklist": [],
+    "symbol_profiles": {"XAUUSD": {"max_spread_points": 60, "risk_multiplier": 1.0}}
+  },
+  "execution": {
+    "max_signal_age_seconds": 120,
+    "zone_policy": "WAIT",
+    "waiting_signal_expiry_minutes": 60,
+    "tp_strategy": "SPLIT",
+    "tp_allocation": [0.5, 0.3, 0.2],
+    "move_sl_to_be_after_tp": 1,
+    "on_tp_hit_message": "IGNORE"
+  },
+  "sources": [
+    {"chat_id": -1001234567890, "title": "My signal group", "enabled": true,
+     "risk_multiplier": 1.0, "symbol_aliases": {"GOLD": "XAUUSD"}, "template": "default"}
+  ],
+  "mt5": {"terminal_path": "", "login": 12345678, "server": "ICMarketsSC-Demo"},
+  "paper": {"starting_balance": 10000, "extra_spread_points": 0, "slippage_points": 5, "commission_per_lot": 7},
+  "notifications": {"desktop": true, "telegram_destination": ""}
+}
