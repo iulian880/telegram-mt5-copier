@@ -14,6 +14,18 @@ from pathlib import Path
 
 
 def default_data_dir() -> Path:
+    # The portable build (packaging/tgmt5_portable.spec) sets TGMT5_PORTABLE=1 and keeps its
+    # data in a "TGMT5-data" folder next to the .exe, if that location is writable.
+    if os.environ.get("TGMT5_PORTABLE") == "1":
+        portable = Path(sys.executable).resolve().parent / "TGMT5-data"
+        try:
+            portable.mkdir(parents=True, exist_ok=True)
+            probe = portable / ".write-test"
+            probe.touch()
+            probe.unlink()
+            return portable
+        except OSError:
+            pass  # read-only location: fall back to the per-user folder
     base = os.environ.get("LOCALAPPDATA")
     return Path(base) / "TGMT5" if base else Path.home() / ".tgmt5"
 

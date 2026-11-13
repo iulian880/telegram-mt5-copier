@@ -48,20 +48,31 @@ It starts in **monitor-only** mode, refuses non-demo accounts at the backend lev
 
 All MetaTrader5 calls run on one worker thread, because the official package is not thread-safe. Running them serially also prevents races between signals that arrive at the same time. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the state machine, the database schema and design decisions.
 
-## Quick start
+## Download (Windows)
+
+Get both files from the [latest release](https://github.com/iulian880/telegram-mt5-copier/releases/latest):
+
+| File | Use it when |
+|---|---|
+| `TGMT5-Setup-<version>.exe` | You want a normal install. The wizard lets you choose me only or all users, the install folder, the Start-menu folder (or none), a desktop shortcut, start with Windows, and more. |
+| `TGMT5-Portable-<version>.exe` | You want one self-contained file to copy and run, with no install. It keeps its data next to the `.exe`. |
+
+You also need the MetaTrader 5 terminal for real (demo) trading. `--sandbox` works without it. The files are signed with a self-signed test certificate, so Windows SmartScreen will warn you: click **More info → Run anyway**. Details are in [INSTALL_WINDOWS.md](docs/INSTALL_WINDOWS.md).
+
+## Quick start (from source)
 
 ```powershell
-# Windows 11, Python 3.12+, MetaTrader 5 terminal installed
+# Windows 11, Python 3.12 or newer, MetaTrader 5 terminal installed
 git clone https://github.com/iulian880/telegram-mt5-copier
 cd telegram-mt5-copier
-py -3.12 -m venv .venv; .\.venv\Scripts\Activate.ps1
+py -3 -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 python -m tgmt5             # real mode (starts in MONITOR ONLY)
 python -m tgmt5 --sandbox   # try everything with a simulated broker + Telegram feed (any OS)
 ```
 
 Full guides:
-- [Windows installation & packaging](docs/INSTALL_WINDOWS.md)
+- [Windows installation, installer, portable build & code signing](docs/INSTALL_WINDOWS.md)
 - [Telegram API setup](docs/TELEGRAM_SETUP.md)
 - [IC Markets SC DEMO / MT5 setup](docs/MT5_DEMO_SETUP.md)
 - [User guide](docs/USER_GUIDE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
@@ -70,7 +81,7 @@ Full guides:
 ## Tests
 
 ```bash
-pytest -q                    # 174 tests, no credentials or broker needed
+pytest -q                    # 177 tests, no credentials or broker needed
 pytest -m demo_e2e -s        # optional real DEMO round trip (Windows, explicit opt-in)
 ```
 
@@ -78,8 +89,8 @@ The suite covers parser formats and false positives, edits, duplicates, reply-ba
 
 ## Tech stack
 
-Python 3.12+ · MetaTrader5 · Telethon · PySide6 + qasync · SQLAlchemy 2 + Alembic · SQLite (WAL) · Pydantic 2 · keyring · pytest · PyInstaller · GitHub Actions
+Python 3.12+ · MetaTrader5 · Telethon · PySide6 + qasync · SQLAlchemy 2 + Alembic · SQLite (WAL) · Pydantic 2 · keyring · pytest · PyInstaller · Inno Setup · GitHub Actions
 
 ## License
 
-MIT © 2026 Petcu
+MIT © 2026 Petcu Iulian

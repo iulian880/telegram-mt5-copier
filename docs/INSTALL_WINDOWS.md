@@ -1,16 +1,18 @@
 # Windows installation
 
+The quickest way is to download `TGMT5-Setup-<version>.exe` (installer) or `TGMT5-Portable-<version>.exe` (no install) from the [latest release](https://github.com/iulian880/telegram-mt5-copier/releases/latest). The sections [Install with the setup file](#install-with-the-setup-file) and [Portable version](#portable-version-no-installation) below explain both. The rest of this page covers running and building from source.
+
 ## Requirements
 - Windows 10/11 (64-bit)
-- Python 3.12 or newer, from python.org (tick "Add python.exe to PATH")
-- MetaTrader 5 desktop terminal (the IC Markets download, or any MT5 build)
+- MetaTrader 5 desktop terminal (the IC Markets download, or any MT5 build). Not needed for `--sandbox`.
 - A Telegram account that is a member of the signal groups
+- From source only: Python 3.12 or newer, from python.org (tick "Add python.exe to PATH")
 
 ## Install from source
 ```powershell
 git clone https://github.com/iulian880/telegram-mt5-copier
 cd telegram-mt5-copier
-py -3.12 -m venv .venv
+py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"     # also installs MetaTrader5 on Windows
 pytest -q                   # optional: run the test suite
@@ -22,9 +24,65 @@ Data is stored in `%LOCALAPPDATA%\TGMT5` (`tgmt5.db` plus rotating JSON logs in 
 ## Build the executable
 ```powershell
 .\packaging\build_windows.ps1
-# → dist\TGMT5\TGMT5.exe   (copy the whole dist\TGMT5 folder)
+# → dist\TGMT5\TGMT5.exe   (one-folder build; the installer packs this folder)
 ```
-The spec file is `packaging/tgmt5.spec`. It is a one-folder build and includes the Alembic migrations. To add an icon, put a `packaging/tgmt5.ico` file there.
+The script creates `.venv` with the newest installed Python 3 if it is missing, and stops if that Python is older than 3.12. The spec file is `packaging/tgmt5.spec`. It is a one-folder build, includes the Alembic migrations and uses `packaging/tgmt5.ico`.
+
+`build/` and `dist/` are only intermediate output. You can delete them after building the installer or the portable file.
+
+## Build the installer
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`).
+```powershell
+.\packaging\build_windows.ps1     # first: dist\TGMT5\
+.\packaging\build_installer.ps1   # → TGMT5-Setup-<version>.exe in the repository root
+```
+The script is `packaging/installer.iss`. When you release a new version, bump only `version` in `pyproject.toml`; the build scripts read it from there. Keep `AppId` the same so upgrades replace the old install.
+
+## Install with the setup file
+Run `TGMT5-Setup-<version>.exe`. The wizard lets you choose:
+
+| Option | Default |
+|---|---|
+| Install for **me only** (no admin) or for **all users** (asks for admin) | me only |
+| Install folder | `%LOCALAPPDATA%\Programs\TGMT5` (me only) / `C:\Program Files\TGMT5` (all users) |
+| Start-menu folder name, or **Don't create a Start Menu folder** | `TGMT5` |
+| Desktop shortcut | off |
+| "Sandbox demo" shortcut | on |
+| Start TGMT5 when you sign in to Windows | off |
+| Launch TGMT5 when setup finishes | on |
+
+The Start-menu folder holds TGMT5, the Sandbox demo shortcut (if chosen) and an uninstall shortcut. If you run setup again, it remembers your previous choices.
+
+Windows SmartScreen may warn you unless the file is signed with a trusted certificate (see *Code signing*). Click **More info → Run anyway**.
+
+To install silently, use `TGMT5-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`. You can add these switches:
+- `/DIR="D:\Apps\TGMT5"`: install folder
+- `/NOICONS`: no Start-menu folder
+- `/TASKS="desktopicon,sandboxicon,autostart"`: which extra options to turn on
+- `/CURRENTUSER` or `/ALLUSERS`: install for me only or for all users
+
+To uninstall, use **Settings → Apps → TGMT5**. The uninstaller asks whether to delete your data in `%LOCALAPPDATA%\TGMT5` and the credentials saved in Credential Manager. The default is **No**, so they are kept for a later reinstall. A silent uninstall always keeps them.
+
+## Portable version (no installation)
+`TGMT5-Portable-<version>.exe` is a single self-contained file. Copy it anywhere, such as a USB stick or a shared folder, and run it. It needs no install and no admin rights, and it adds no shortcuts or uninstall entry. This makes it the easiest version to give to someone else.
+
+- It keeps its data in a `TGMT5-data` folder next to the `.exe`. If that folder can't be written, it uses `%LOCALAPPDATA%\TGMT5` instead. Credentials still go to Windows Credential Manager.
+- Each start unpacks the app to a temporary folder first, so it starts a few seconds slower than the installed version.
+- To run the sandbox demo: `TGMT5-Portable-<version>.exe --sandbox`
+- Build it with `.\packaging\build_portable.ps1` (needs `.venv`). The result is `TGMT5-Portable-<version>.exe` in the repository root, signed if a certificate is available.
+
+## Icon
+The icon is `packaging/tgmt5.ico`, generated by `packaging/make_icon.py` (needs Pillow). It is used for the executable, the setup file and the uninstaller.
+
+## Code signing
+`build_windows.ps1` signs `TGMT5.exe`. `build_installer.ps1` signs the setup file and the uninstaller. Both call `packaging/sign.ps1` (signtool, SHA-256, DigiCert timestamp) and pick the certificate in this order:
+1. `TGMT5_SIGN_PFX` (+ `TGMT5_SIGN_PFX_PASSWORD`): a `.pfx` file
+2. `TGMT5_SIGN_THUMBPRINT`: a certificate in `CurrentUser\My`
+3. `CN=TGMT5 Dev`: a self-signed test certificate made by `packaging\new_dev_cert.ps1`
+
+If none is found, the build still works and leaves the files unsigned.
+
+**About the self-signed certificate:** Windows does not trust it. Files signed with it still trigger SmartScreen and show the publisher as untrusted. To remove the warning for other users, sign with a certificate from a public CA. Microsoft's Azure Trusted Signing is a low-cost option, and SignPath.io is free for open-source projects. Even with a trusted certificate, SmartScreen can warn at first, until the signed file builds a download reputation.
 
 ## Sandbox mode
 `python -m tgmt5 --sandbox` runs the whole app with a simulated broker and Telegram feed. It needs no credentials and its data is kept in a separate `sandbox` folder.

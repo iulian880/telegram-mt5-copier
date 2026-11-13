@@ -15,4 +15,6 @@
 | Many `MANUAL REVIEW` | Use per-source aliases, or the `implicit_market` template for providers who post `BUY GOLD` + SL/TP without "now". |
 | Telegram `not authorised` | Sign in again in Sources. If you revoked the session in Telegram, the stored one is invalid. |
 | `database is locked` | Another TGMT5 instance is running on the same data folder. Close it. |
-| Logs | `%LOCALAPPDATA%\TGMT5\logs\tgmt5.jsonl`, plus the in-app **Log** page. |
+| "Windows protected your PC" (SmartScreen) | The release files are signed with a self-signed test certificate, so Windows doesn't recognise the publisher. Click **More info → Run anyway**. |
+| Portable version starts slowly | It unpacks itself to a temporary folder on every start. That is normal. Use the installer for faster start-up. |
+| Logs | `%LOCALAPPDATA%\TGMT5\logs\tgmt5.jsonl` (portable version: `TGMT5-data\logs\` next to the `.exe`), plus the in-app **Log** page. |
