@@ -364,10 +364,14 @@ def manage_open_trades(eng: "ExecutionEngine") -> None:
                                              status_to=sig.status, ts=eng.clock(),
                                              message=f"leg {leg.leg_index} closed, P/L {leg.profit}"))
             s.flush()
-            _auto_breakeven(eng, s, sig, legs, ex)
-            _managed_partials(eng, s, sig, legs, ex)
-            if ex.trailing_enabled:
-                _trail(eng, s, sig, legs, ex)
+            # Monitor-only mode (e.g. right after a restart or an update) cannot send orders:
+            # keep tracking the legs but leave breakeven / partials / trailing for later, so they
+            # are applied as soon as execution is switched back on instead of being marked done.
+            if eng.mode is not ExecutionMode.MONITOR:
+                _auto_breakeven(eng, s, sig, legs, ex)
+                _managed_partials(eng, s, sig, legs, ex)
+                if ex.trailing_enabled:
+                    _trail(eng, s, sig, legs, ex)
             _maybe_close_signal(eng, s, sig, legs)
 
 

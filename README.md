@@ -81,7 +81,7 @@ Full guides:
 ## Tests
 
 ```bash
-pytest -q                    # 206 tests, no credentials or broker needed
+pytest -q                    # 207 tests, no credentials or broker needed
 pytest -m demo_e2e -s        # optional real DEMO round trip (Windows, explicit opt-in)
 ```
 

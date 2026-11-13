@@ -157,6 +157,22 @@ def test_tp_hit_message_breakeven_option(opened):
     assert all(p.sl == p.price_open for p in h.broker.positions())
 
 
+def test_tp1_hit_while_in_monitor_mode_gets_breakeven_after_switching_back(opened):
+    """Restart / update with open trades: the app starts in MONITOR, TP1 is hit meanwhile."""
+    from tgmt5.services.app import ReadOnlyGateway
+    h, sid = opened
+    h.engine.set_mode(ExecutionMode.MONITOR, ReadOnlyGateway(h.gw))
+    h.broker.set_price("XAUUSD", 2671.0, 2671.2)     # TP1 leg closes at the broker
+    h.engine.on_tick()
+    legs = h.signal(sid).executions
+    assert legs[0].state == LegState.CLOSED.value
+    assert not any(l.be_applied for l in legs[1:])    # not attempted, not wrongly marked done
+    assert all(p.sl == 2650 for p in h.broker.positions())
+    h.engine.set_mode(ExecutionMode.DEMO, h.gw)       # user switches execution back on
+    h.engine.on_tick()
+    assert all(p.sl == p.price_open for p in h.broker.positions())
+
+
 def test_tp1_hit_by_price_moves_others_to_be(opened):
     h, sid = opened
     h.broker.set_price("XAUUSD", 2671.0, 2671.2)     # TP1 leg closes at broker
