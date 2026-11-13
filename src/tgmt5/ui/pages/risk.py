@@ -12,16 +12,18 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
+from datetime import datetime
+
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QRadioButton, QSlider, QSpinBox, QStackedWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QHeaderView, QInputDialog,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QSlider, QSpinBox, QStackedWidget,
     QTableWidget, QTableWidgetItem, QWidget,
 )
 from pydantic import ValidationError
 
 from tgmt5.config import (
-    PER_TP_MODES, AppConfig, RiskSettings, SizingMode, SmallVolumePolicy, TpHitAction, TpStrategy,
-    ZonePolicy,
+    PER_TP_MODES, AppConfig, ExecutionSettings, RiskSettings, SizingMode, SmallVolumePolicy, TpHitAction,
+    TpStrategy, ZonePolicy,
 )
 from tgmt5.review import pending_reviews, required_keys, review_value
 from tgmt5.risk.preview import NOT_AT_BROKER
@@ -76,12 +78,14 @@ ALLOC_PRESETS: list[tuple[str, list[float] | None]] = [
     ("Back-loaded 20 / 30 / 50", [0.2, 0.3, 0.5]),
     ("Custom…", None),
 ]
-PRESETS = [
-    "Apply a preset…",
+BUILTIN_PROFILES = [
     "Small account (200–500): 0.01 on every TP, no % caps, no drawdown lockouts",
     "Growing account: 0.01 per TP for every 300 of balance",
     "Conservative: 0.5% of equity per signal, all protections on",
 ]
+#: execution settings that are not on the Risk page and must not be changed by applying a profile
+_NOT_IN_PROFILES = ("magic_number", "cross_source_dedup_seconds", "reconcile_retry_once")
+MAX_PROFILE_NAME = 40
 PREVIEW_COLUMNS = ["Symbol", "SL", "Lots that open", "Loss if SL hit", "% equity", "Margin", "Opens?"]
 
 
@@ -142,10 +146,27 @@ class RiskPage(Page):
         banner = Card("Pre-trade review")
         self.rv_pill = Pill("", "loss")
         self.rv_text = label("", "muted", wrap=True)
+        banner.add(layout=hbox(self.rv_pill, self.rv_text))
+        # ---- risk profiles: built-in presets + the user's own named profiles
         self.preset = QComboBox()
-        self.preset.addItems(PRESETS)
-        self.preset.activated.connect(self._apply_preset)
-        banner.add(layout=hbox(self.rv_pill, self.rv_text, self.preset))
+        self.preset.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.preset.setMinimumContentsLength(26)
+        self.preset.currentIndexChanged.connect(self._update_profile_buttons)
+        self.p_apply = QPushButton("Apply")
+        self.p_apply.setProperty("kind", "primary")
+        self.p_save = QPushButton("Save current as…")
+        self.p_rename = QPushButton("Rename…")
+        self.p_delete = QPushButton("Delete")
+        self.p_apply.clicked.connect(self._on_apply_profile)
+        self.p_save.clicked.connect(self._on_save_profile)
+        self.p_rename.clicked.connect(self._on_rename_profile)
+        self.p_delete.clicked.connect(self._on_delete_profile)
+        self.p_apply.setToolTip("Load the selected profile into the form (then check the red settings and Save)")
+        self.p_save.setToolTip("Save everything on this page as a named profile (your live settings are not changed)")
+        banner.add(ResponsiveRow(hbox(label("Risk profile", "muted"), self.preset, spacing=8),
+                                 hbox(self.p_apply, self.p_save, self.p_rename, self.p_delete, "stretch",
+                                      spacing=8),
+                                 breakpoint=780, spacing=8, stretches=[3, 4]))
         self.body.addWidget(banner)
 
         # ---------------------------------------------------------- 1. sizing
@@ -420,6 +441,7 @@ class RiskPage(Page):
     def load(self) -> None:
         self._fill(self.svc.config)
         self._stamps = dict(self.svc.config.reviewed)
+        self._reload_profiles()
         self._changed_now()
 
     def _fill(self, cfg: AppConfig) -> None:
@@ -504,7 +526,7 @@ class RiskPage(Page):
             return None, (lines[-1] if lines else str(e))
 
     def _dirty(self, cfg: AppConfig) -> bool:
-        skip = {"reviewed", "mode"}
+        skip = {"reviewed", "mode", "risk_profiles"}
         return cfg.model_dump(exclude=skip) != self.svc.config.model_dump(exclude=skip)
 
     # ------------------------------------------------------------------ reactions
@@ -585,14 +607,158 @@ class RiskPage(Page):
             cfg.reviewed = dict(self._stamps)
             run_async(self.svc.save_config(cfg))
 
-    def _apply_preset(self, index: int) -> None:
-        if index <= 0:
-            return
+    # ------------------------------------------------------------------ risk profiles
+    def _reload_profiles(self, select: str | None = None) -> None:
+        current = select if select is not None else self.preset.currentData()
+        self.preset.blockSignals(True)
+        self.preset.clear()
+        self.preset.addItem("Choose a profile…", "")
+        for i, text in enumerate(BUILTIN_PROFILES, 1):
+            self.preset.addItem(f"Built-in · {text}", f"builtin:{i}")
+        names = sorted(self.svc.config.risk_profiles, key=str.lower)
+        if names:
+            self.preset.insertSeparator(self.preset.count())
+        for n in names:
+            self.preset.addItem(f"★ {n}", f"custom:{n}")
+            self.preset.setItemData(self.preset.count() - 1, self._profile_summary(n), Qt.ToolTipRole)
+        idx = self.preset.findData(current) if current else 0
+        self.preset.setCurrentIndex(max(idx, 0))
+        self.preset.blockSignals(False)
+        self._update_profile_buttons()
+
+    def _profile_summary(self, name: str) -> str:
+        p = self.svc.config.risk_profiles.get(name, {})
+        r = p.get("risk", {})
+        try:
+            mode = SizingMode(r.get("sizing_mode", "PCT_EQUITY"))
+            size = {SizingMode.LOT_PER_TP: f"{r.get('lot_per_tp')} lots on every TP",
+                    SizingMode.LOT_PER_BALANCE: f"{r.get('lot_per_tp')} per TP per {r.get('balance_step')}",
+                    SizingMode.FIXED_LOT: f"{r.get('fixed_lot')} lots total",
+                    SizingMode.FIXED_MONEY: f"{r.get('fixed_money')} at risk",
+                    }.get(mode, f"{r.get('risk_percent')} %")
+            caps = "% caps on" if r.get("percent_caps_enabled", True) else "% caps off"
+            dd = "drawdown protection on" if r.get("drawdown_protection", True) else "drawdown protection off"
+            return f"{METHODS[mode][0]}: {size} · {caps} · {dd} · saved {p.get('saved', '?')}"
+        except (ValueError, KeyError):
+            return f"saved {p.get('saved', '?')}"
+
+    def _selected_profile(self) -> tuple[str, str]:
+        data = self.preset.currentData() or ""
+        kind, _, value = data.partition(":")
+        return kind, value
+
+    def _update_profile_buttons(self, *_a) -> None:
+        kind, _ = self._selected_profile()
+        self.p_apply.setEnabled(kind in ("builtin", "custom"))
+        self.p_rename.setEnabled(kind == "custom")
+        self.p_delete.setEnabled(kind == "custom")
+
+    def _check_name(self, name: str, *, exclude: str | None = None) -> str:
+        name = " ".join(name.split())
+        if not name:
+            raise ValueError("Enter a name")
+        if len(name) > MAX_PROFILE_NAME:
+            raise ValueError(f"Use at most {MAX_PROFILE_NAME} characters")
+        if name.lower().startswith("built-in"):
+            raise ValueError("That name is reserved for the built-in profiles")
+        if any(n.lower() == name.lower() and n != exclude for n in self.svc.config.risk_profiles) and exclude:
+            raise ValueError(f"A profile called '{name}' already exists")
+        return name
+
+    def save_profile(self, name: str):
+        """Save everything on this page as a named profile. The live settings are not changed."""
         cfg, err = self._try_collect()
         if cfg is None:
-            Toast.show_error(f"Fix the invalid setting first: {err}")
-            self.preset.setCurrentIndex(0)
+            raise ValueError(f"Fix the invalid setting first: {err}")
+        target = self.svc.config.model_copy(deep=True)
+        target.risk_profiles[name] = {
+            "risk": cfg.risk.model_dump(mode="json"),
+            "execution": {k: v for k, v in cfg.execution.model_dump(mode="json").items() if k not in _NOT_IN_PROFILES},
+            "saved": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        return run_async(self.svc.save_config(target), lambda _: (
+            self._reload_profiles(f"custom:{name}"), Toast.show_message(f"Profile '{name}' saved", "profit")))
+
+    def apply_profile(self, name: str) -> None:
+        """Load a saved profile into the form (not saved until Save, like the built-in presets)."""
+        data = self.svc.config.risk_profiles.get(name)
+        cfg, err = self._try_collect()
+        if data is None or cfg is None:
+            raise ValueError(f"Fix the invalid setting first: {err}" if cfg is None else f"No profile '{name}'")
+        ex = {**cfg.execution.model_dump(mode="json"), **data.get("execution", {})}
+        ex.update({k: getattr(cfg.execution, k) for k in _NOT_IN_PROFILES})
+        try:
+            cfg.risk = RiskSettings.model_validate(data.get("risk", {}))
+            cfg.execution = ExecutionSettings.model_validate(ex)
+        except ValidationError as e:
+            raise ValueError(f"Profile '{name}' cannot be used: {str(e).splitlines()[-1]}") from e
+        self._fill(cfg)
+        self._changed_now()
+        Toast.show_message(f"Profile '{name}' loaded: check the red settings, then Save", "info")
+
+    def rename_profile(self, old: str, new: str):
+        target = self.svc.config.model_copy(deep=True)
+        target.risk_profiles = {(new if k == old else k): v for k, v in target.risk_profiles.items()}
+        return run_async(self.svc.save_config(target), lambda _: (
+            self._reload_profiles(f"custom:{new}"), Toast.show_message(f"Profile renamed to '{new}'", "info")))
+
+    def delete_profile(self, name: str):
+        target = self.svc.config.model_copy(deep=True)
+        target.risk_profiles.pop(name, None)
+        return run_async(self.svc.save_config(target), lambda _: (
+            self._reload_profiles(""), Toast.show_message(f"Profile '{name}' deleted", "info")))
+
+    def _on_apply_profile(self) -> None:
+        kind, value = self._selected_profile()
+        try:
+            if kind == "builtin":
+                self._apply_builtin(int(value))
+            elif kind == "custom":
+                self.apply_profile(value)
+        except ValueError as e:
+            Toast.show_error(str(e))
+
+    def _on_save_profile(self) -> None:
+        kind, value = self._selected_profile()
+        name, ok = QInputDialog.getText(self, "Save risk profile",
+                                        "Name for this profile (everything on the Risk page is saved):",
+                                        text=value if kind == "custom" else "")
+        if not ok:
             return
+        try:
+            name = self._check_name(name)
+            existing = next((n for n in self.svc.config.risk_profiles if n.lower() == name.lower()), None)
+            if existing and QMessageBox.question(
+                    self, "Replace profile", f"A profile called '{existing}' already exists. Replace it?") \
+                    != QMessageBox.Yes:
+                return
+            self.save_profile(existing or name)
+        except ValueError as e:
+            Toast.show_error(str(e))
+
+    def _on_rename_profile(self) -> None:
+        kind, old = self._selected_profile()
+        if kind != "custom":
+            return
+        new, ok = QInputDialog.getText(self, "Rename risk profile", "New name:", text=old)
+        if not ok or new.strip() == old:
+            return
+        try:
+            self.rename_profile(old, self._check_name(new, exclude=old))
+        except ValueError as e:
+            Toast.show_error(str(e))
+
+    def _on_delete_profile(self) -> None:
+        kind, name = self._selected_profile()
+        if kind == "custom" and QMessageBox.question(
+                self, "Delete risk profile", f"Delete the profile '{name}'? Your current settings are not changed.") \
+                == QMessageBox.Yes:
+            self.delete_profile(name)
+
+    def _apply_builtin(self, index: int) -> None:
+        cfg, err = self._try_collect()
+        if cfg is None:
+            raise ValueError(f"Fix the invalid setting first: {err}")
         r, e = cfg.risk, cfg.execution
         if index == 3:
             cfg.risk = RiskSettings()
@@ -623,9 +789,8 @@ class RiskPage(Page):
         e.tp_allocation = [1.0, 1.0, 1.0]
         e.move_sl_to_be_after_tp = 1
         self._fill(cfg)
-        self.preset.setCurrentIndex(0)
         self._changed_now()
-        Toast.show_message("Preset applied: check the red settings, then Save", "info")
+        Toast.show_message("Built-in profile loaded: check the red settings, then Save", "info")
 
     # ------------------------------------------------------------------ preview
     def _request_preview(self) -> None:

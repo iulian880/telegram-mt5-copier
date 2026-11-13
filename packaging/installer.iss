@@ -11,7 +11,7 @@
 
 #define AppName "TGMT5"
 #ifndef AppVersion
-  #define AppVersion "0.2.2"
+  #define AppVersion "0.3.0"
 #endif
 #define AppPublisher "Petcu Iulian"
 #define AppExe "TGMT5.exe"

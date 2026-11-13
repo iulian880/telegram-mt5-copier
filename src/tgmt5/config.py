@@ -199,6 +199,10 @@ class AppConfig(_Strict):
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     # Pre-trade review: critical risk field -> value it had when the user ticked it (see tgmt5.review)
     reviewed: dict[str, str] = Field(default_factory=dict)
+    # Named risk profiles saved by the user: name -> {"risk": {...}, "execution": {...}, "saved": "..."}.
+    # Kept as plain data and validated only when applied, so a profile saved by another version
+    # can never stop the configuration from loading.
+    risk_profiles: dict[str, dict] = Field(default_factory=dict)
 
     def mark_all_reviewed(self) -> None:
         """Tick every critical risk field at its current value (tests, scripted setups)."""

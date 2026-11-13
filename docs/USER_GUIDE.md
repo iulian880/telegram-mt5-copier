@@ -53,6 +53,13 @@ Pick one **sizing method**. Only the input that method needs is shown.
 
 **What will be opened** shows, for each symbol, the exact lots per TP, the loss if the SL is hit, the % of equity and the margin. When MT5 is connected it uses the detected balance and the broker's own calculations, through the same sizing code the engine uses. Without a connection it uses an example balance and approximate pip values. It can use a typical signal (SL in pips, number of TPs) or your most recent real signals. Every blocked symbol shows the reason.
 
+## Risk profiles
+At the top of the Risk page, pick a **risk profile**: one of the three built-in ones (Small account, Growing account, Conservative) or one of **your own**, marked ★.
+- **Save current as…** stores everything on the Risk page under a name you choose, for example "Lingrid 300 EUR". Your live settings are not changed. Reusing an existing name asks before replacing it.
+- **Apply** loads the selected profile into the form. Like any change, it must be checked (red fields) and saved with **Save risk settings** before it is used.
+- **Rename…** and **Delete** work on your own profiles. Hover a profile to see a summary.
+- Profiles are part of the configuration: they survive updates and are included in *Export config…* / *Import config…*.
+
 ## Small accounts (from about 200 EUR)
 With 200–500 EUR, one minimum lot (0.01) on three TPs is already about 5–8 % of the account per signal at a ~55-pip stop. The percentage caps and the drawdown lockouts would block every trade. Use the **Small account** preset, or set it up yourself:
 - Fixed lot on every TP = 0.01
