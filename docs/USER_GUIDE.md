@@ -16,6 +16,8 @@
 
 The account type is checked again before every order. Outside REAL ACCOUNT mode a real account only accepts closing / protecting orders (close, remove pending, change SL/TP), so you can always manage open positions. Switching *Allow real-money accounts* off stops REAL ACCOUNT mode immediately and forgets the confirmation. The setting is never imported from a config file.
 
+**At start-up** the app is always in Monitor only. If the MT5 password is saved in Credential Manager, it reconnects to MT5 by itself, still in Monitor only, so positions and balance are visible straight away. Switch execution back on in Connection.
+
 ## Safety controls
 - **EMERGENCY STOP** (top right): switches to Monitor only, cancels waiting signals and persists across restarts. Open positions are not touched. Clear it in *Risk → Equity protection*.
 - **Flatten all…**: closes every position and pending order *opened by this app* (tracked legs and magic number), after a confirmation. Your manual trades are not affected.

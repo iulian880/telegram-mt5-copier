@@ -8,6 +8,8 @@
 | `Account … is NOT a demo account` | Real-money accounts are refused by default. Log the terminal in to your demo account, or switch on *Allow real-money accounts* in Connection and use REAL ACCOUNT mode. |
 | `REAL ACCOUNT execution has not been confirmed` | Choose REAL ACCOUNT in Connection → Apply mode, tick the risk statement and type the account number. |
 | `Review the red risk settings first` | Open Risk and tick every red setting (✓). Changed values must be ticked again. |
+| Positions page empty / MT5 disconnected after a restart or update | TGMT5 reconnects by itself only when the MT5 password is saved in Credential Manager. Otherwise use Connection → Connect & verify (tick *Save password* once). Your positions stay at the broker with their SL/TP meanwhile. |
+| Setup says it could not close TGMT5 | Versions before 0.2.2 did not close cleanly when Setup asked. Close TGMT5 yourself, then click Retry. From 0.2.2 on, Setup closes it automatically. |
 | `Algo Trading is disabled in the terminal` (retcode 10027) | Turn on the **Algo Trading** button in MT5. |
 | `symbol XAUUSD not found (or ambiguous)` | The broker uses a suffix or several variants. Set **Symbol suffix** in Connection, or add an alias on the source. |
 | `Unsupported filling mode` (10030) | The app retries with the next mode the symbol allows (FOK → IOC → RETURN). If it still fails, see the log. |

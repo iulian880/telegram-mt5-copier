@@ -104,12 +104,36 @@ def main(argv: list[str] | None = None) -> int:
             asyncio.create_task(_sandbox_tasks(svc))
 
     close = asyncio.Event()
-    app.aboutToQuit.connect(close.set)
-    with loop:
-        loop.create_task(boot())
-        loop.run_until_complete(close.wait())
-        loop.run_until_complete(svc.stop())
-    return 0
+
+    def quiet_after_close(lp, context) -> None:
+        # once the app is closing, leftover task wake-ups on the stopped loop are expected noise
+        if not svc._closed:
+            lp.default_exception_handler(context)
+    loop.set_exception_handler(quiet_after_close)
+
+    def on_quit() -> None:
+        # Runs synchronously: when Windows or an installer ends the app, Qt emits aboutToQuit from
+        # inside the end-session message, where the asyncio loop no longer runs. Clean up now.
+        svc.shutdown_now()
+        try:
+            loop.call_soon_threadsafe(close.set)
+        except RuntimeError:
+            pass
+
+    app.aboutToQuit.connect(on_quit)
+    try:
+        with loop:
+            loop.create_task(boot())
+            loop.run_until_complete(close.wait())
+            loop.run_until_complete(svc.stop())
+    except RuntimeError:
+        pass        # loop stopped by the OS / installer; shutdown_now() already cleaned up
+    finally:
+        import logging
+        logging.shutdown()
+        # Exit now instead of waiting for background threads (Telegram, executors): an installer
+        # closing the app must not have to wait or time out.
+        os._exit(0)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ Latest run: 2026-11-13 on Windows 11 (Python 3.14.8, PySide6 6.12.0, Telethon 1.
 
 ```
 $ pytest -q
-207 passed, 1 deselected in 4.0s
+210 passed, 1 deselected in 4.0s
 ```
 
 The first run, on 2026-11-03, used a Linux CI-style container (Python 3.13, Qt offscreen) and gave 174 passed. Tests added since then: `test_main.py` (portable data folder) `test_sizing_modes.py` (sizing methods, small-account settings, pre-trade review, account-based preview), `test_config_compat.py` (settings saved by v0.1.0 still load) and `test_real_account.py` (REAL ACCOUNT mode: opt-in, typed confirmation, guard on every order, closing positions outside the mode, never imported).

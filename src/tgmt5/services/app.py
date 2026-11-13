@@ -100,6 +100,7 @@ class AppService:
         self.risk = RiskEngine(lambda: self.config.risk, lambda: self.db.get_setting("risk_state"),
                                lambda v: self.db.set_setting("risk_state", v))
         self._mt5 = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mt5")
+        self._closed = False
         self.engine = ExecutionEngine(self.db, None, self.risk, lambda: self.config,
                                       mode=ExecutionMode.MONITOR, emit=self._emit)
         self.queue: asyncio.Queue[TelegramMessage] = asyncio.Queue(maxsize=1000)
@@ -159,6 +160,23 @@ class AppService:
         self._tasks = [asyncio.create_task(self._consume(), name="consumer"),
                        asyncio.create_task(self._ticker(), name="ticker")]
         await self.start_telegram()
+        if not self.sandbox and self.config.mt5.auto_connect:
+            self._tasks.append(asyncio.create_task(self._auto_connect(), name="mt5-auto-connect"))
+
+    async def _auto_connect(self) -> None:
+        """Reconnect MT5 at start-up (monitor-only) when a password is saved, so open positions,
+        balance and the sizing preview are there right after a restart or an update."""
+        cfg = self.config.mt5
+        if cfg.login is None or not cfg.server or self.real_gw is not None:
+            return
+        if not self.secrets.get(SecretStore.mt5_password_key(cfg.login)):
+            return
+        try:
+            acct = await self.connect_mt5()
+            self.engine.audit_app("INFO", "mt5", f"Auto-connected to account {acct.login} at start-up "
+                                                 "(monitor-only; switch execution on in Connection)")
+        except Exception as e:  # noqa: BLE001 - shown in the log, the user can connect by hand
+            self.engine.audit_app("WARNING", "mt5", f"Auto-connect at start-up failed: {e}")
 
     async def start_telegram(self) -> bool:
         try:
@@ -170,15 +188,36 @@ class AppService:
             return False
 
     async def stop(self) -> None:
+        if self._closed:
+            return
         for t in self._tasks:
             t.cancel()
         try:
             await self.telegram.stop()
         except Exception:  # noqa: BLE001
             pass
-        if self.real_gw:
-            await self.run_mt5(self.real_gw.disconnect)
-        self._mt5.shutdown(wait=True)
+        self.shutdown_now()
+
+    def shutdown_now(self, timeout: float = 5.0) -> None:
+        """Synchronous, bounded shutdown. Safe to call when the asyncio loop can no longer run,
+        e.g. when Windows or an installer (Restart Manager) closes the app: Qt then emits
+        aboutToQuit from inside the end-session message and the process must exit right away."""
+        if self._closed:
+            return
+        self._closed = True
+        for t in self._tasks:
+            t.cancel()
+        try:
+            if self.real_gw:
+                self._mt5.submit(self.real_gw.disconnect).result(timeout=timeout)
+        except Exception:  # noqa: BLE001 - best effort; the process is ending
+            pass
+        try:
+            self.risk.persist()
+            self.engine.audit_app("INFO", "app", "Application closed")
+        except Exception:  # noqa: BLE001
+            pass
+        self._mt5.shutdown(wait=False, cancel_futures=True)
 
     def enabled_chat_ids(self) -> list[int]:
         return [s.chat_id for s in self.config.sources if s.enabled]

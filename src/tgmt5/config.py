@@ -169,6 +169,8 @@ class MT5Settings(_Strict):
     # Real-money accounts are refused unless this is switched on (and each account is then
     # confirmed by typing its number before REAL ACCOUNT mode can be enabled).
     allow_real_account: bool = False
+    # Reconnect at start-up (monitor-only) when the password is saved in Credential Manager.
+    auto_connect: bool = True
 
 
 class PaperSettings(_Strict):

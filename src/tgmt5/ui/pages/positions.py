@@ -54,6 +54,10 @@ class PositionsPage(Page):
         c = Card("Open positions")
         c.header.addWidget(self.modify_btn)
         c.header.addWidget(self.close_btn)
+        self.conn_note = label("", wrap=True)
+        self.conn_note.setStyleSheet("color: #F5A524; font-weight: 600;")
+        self.conn_note.setVisible(False)
+        c.add(self.conn_note)
         c.add(self.table)
         self.body.addWidget(c)
         self.orders = QTableWidget(0, 7)
@@ -69,6 +73,9 @@ class PositionsPage(Page):
 
     def refresh(self, s: Snapshot) -> None:
         pal = palette()
+        self.conn_note.setVisible(not s.mt5_connected)
+        self.conn_note.setText("⚠ Not connected to MT5: open positions cannot be shown. They are still at the "
+                               "broker with their SL/TP. Connect in Connection → Connect & verify.")
         sel = self._selected()
         self._rows = s.positions
         self.table.setRowCount(len(s.positions))
