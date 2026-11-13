@@ -34,6 +34,7 @@ class RiskState:
     day: str = ""
     day_start_equity: float = 0.0
     confirmed_account: str = ""            # "login@server" the user confirmed for automated DEMO exec
+    confirmed_real_account: str = ""       # "login@server" confirmed (typed) for REAL ACCOUNT exec
     trade_times: list[float] = field(default_factory=list)
 
 
@@ -104,11 +105,12 @@ class RiskEngine:
         today = self._clock().date().isoformat()
         if s.emergency_stop:
             return f"Emergency stop active ({s.emergency_reason})"
-        if s.drawdown_lockout:
+        protect = self.settings.drawdown_protection     # lockouts only block while protection is on
+        if protect and s.drawdown_lockout:
             return f"Drawdown lockout ({s.drawdown_reason})"
-        if s.daily_lockout_day == today:
+        if protect and s.daily_lockout_day == today:
             return f"Daily loss lockout ({s.daily_lockout_reason})"
-        if s.breaker_tripped:
+        if protect and s.breaker_tripped:
             return f"Consecutive-loss circuit breaker ({s.consecutive_losses} losses)"
         if self.mt5_unstable:
             return "MT5 connectivity unstable - execution paused"
@@ -127,6 +129,10 @@ class RiskEngine:
         if acct.equity > s.equity_peak:
             s.equity_peak = acct.equity
             changed = True
+        if not cfg.drawdown_protection:      # keep tracking day start / peak, never trip lockouts
+            if changed:
+                self.persist()
+            return
         if s.day_start_equity > 0:
             day_loss_pct = (s.day_start_equity - acct.equity) / s.day_start_equity * 100
             if day_loss_pct >= cfg.max_daily_loss_pct and s.daily_lockout_day != today:
@@ -149,7 +155,7 @@ class RiskEngine:
         elif net_profit > 0:
             s.consecutive_losses = 0
         lim = self.settings.max_consecutive_losses
-        if lim and s.consecutive_losses >= lim:
+        if lim and self.settings.drawdown_protection and s.consecutive_losses >= lim:
             s.breaker_tripped = True
         self.persist()
 
@@ -167,20 +173,10 @@ class RiskEngine:
         return (peak - acct.equity) / peak * 100 if peak > 0 else 0.0
 
     # --------------------------------------------------------- per trade
-    def risk_budget(self, acct: AccountInfo, multiplier: float = 1.0) -> float:
-        """Monetary risk allowed for one signal (already capped at max_risk_per_signal)."""
-        from tgmt5.config import SizingMode
-        cfg = self.settings
-        if cfg.sizing_mode is SizingMode.PCT_EQUITY:
-            budget = acct.equity * cfg.risk_percent / 100
-        elif cfg.sizing_mode is SizingMode.PCT_BALANCE:
-            budget = acct.balance * cfg.risk_percent / 100
-        elif cfg.sizing_mode is SizingMode.FIXED_MONEY:
-            budget = cfg.fixed_money
-        else:  # FIXED_LOT: budget is only the hard cap
-            budget = acct.equity * cfg.max_risk_per_signal_pct / 100
-        budget *= multiplier
-        return min(budget, acct.equity * cfg.max_risk_per_signal_pct / 100)
+    def risk_budget(self, acct: AccountInfo, multiplier: float = 1.0) -> float | None:
+        """Money the sizing method plans to risk on one signal (None for lot-based methods)."""
+        from tgmt5.risk.sizing import signal_budget
+        return signal_budget(self.settings, acct.equity, acct.balance, multiplier)
 
     def check(self, p: TradeProposal, acct: AccountInfo, open_risk: list[OpenRisk],
               active_trades: int, decision: Decision | None = None) -> Decision:
@@ -204,19 +200,20 @@ class RiskEngine:
         max_lot = min(cfg.max_lot_per_order, prof.max_lots if prof and prof.max_lots else 1e9)
         d.add("max_lot", all(v <= max_lot + 1e-9 for v in p.volumes),
               f"order volume exceeds {max_lot}")
-        cap = acct.equity * cfg.max_risk_per_signal_pct / 100
-        d.add("risk_per_signal", p.risk_money <= cap + 0.01,
-              f"risk {p.risk_money:.2f} > cap {cap:.2f}")
-        total_open = sum(r.risk_money for r in open_risk)
-        tcap = acct.equity * cfg.max_total_open_risk_pct / 100
-        d.add("total_open_risk", total_open + p.risk_money <= tcap + 0.01,
-              f"open risk {total_open:.2f} + {p.risk_money:.2f} > {tcap:.2f}")
-        for group, members in cfg.correlation_groups.items():
-            if p.symbol in members:
-                g = sum(r.risk_money for r in open_risk if r.symbol in members)
-                gcap = acct.equity * cfg.max_correlated_risk_pct / 100
-                d.add(f"correlated[{group}]", g + p.risk_money <= gcap + 0.01,
-                      f"correlated risk {g + p.risk_money:.2f} > {gcap:.2f}")
+        if cfg.percent_caps_enabled:
+            cap = acct.equity * cfg.max_risk_per_signal_pct / 100
+            d.add("risk_per_signal", p.risk_money <= cap + 0.01,
+                  f"risk {p.risk_money:.2f} > cap {cap:.2f} ({cfg.max_risk_per_signal_pct:g}% of equity)")
+            total_open = sum(r.risk_money for r in open_risk)
+            tcap = acct.equity * cfg.max_total_open_risk_pct / 100
+            d.add("total_open_risk", total_open + p.risk_money <= tcap + 0.01,
+                  f"open risk {total_open:.2f} + {p.risk_money:.2f} > {tcap:.2f}")
+            for group, members in cfg.correlation_groups.items():
+                if p.symbol in members:
+                    g = sum(r.risk_money for r in open_risk if r.symbol in members)
+                    gcap = acct.equity * cfg.max_correlated_risk_pct / 100
+                    d.add(f"correlated[{group}]", g + p.risk_money <= gcap + 0.01,
+                          f"correlated risk {g + p.risk_money:.2f} > {gcap:.2f}")
         sym_vol = sum(r.volume for r in open_risk if r.symbol == p.symbol)
         d.add("symbol_exposure", sym_vol + total_vol <= cfg.max_lots_per_symbol + 1e-9,
               f"{p.symbol} exposure {sym_vol + total_vol:.2f} lots > {cfg.max_lots_per_symbol}")

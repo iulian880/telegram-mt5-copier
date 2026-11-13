@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtWidgets import QGridLayout
-
 from tgmt5.analytics.stats import compute
 from tgmt5.services.app import Snapshot
 from tgmt5.ui.pages.base import Page
 from tgmt5.ui.widgets import (
-    BarChart, Card, Donut, Dot, Kpi, LineChart, Meter, Pill, hbox, label, money, vbox,
+    BarChart, Card, Donut, Dot, Kpi, LineChart, Meter, Pill, ResponsiveGrid, ResponsiveRow, hbox, label,
+    money, vbox,
 )
+
+MODE_TEXT = {"MONITOR": "Monitor only", "PAPER": "Paper trading", "DEMO": "DEMO auto-execution",
+             "LIVE": "REAL ACCOUNT auto-execution"}
+MODE_TONE = {"MONITOR": "info", "PAPER": "paper", "DEMO": "profit", "LIVE": "loss"}
 
 
 class DashboardPage(Page):
@@ -38,18 +41,14 @@ class DashboardPage(Page):
         self.auto_sub = label("", "muted", wrap=True)
         self.auto_card.add(layout=hbox(self.auto_title, "stretch", self.auto_pill))
         self.auto_card.add(self.auto_sub)
-        self.body.addLayout(hbox(self.acct_card, self.tg_card, self.auto_card, spacing=16))
+        self.body.addWidget(ResponsiveRow(self.acct_card, self.tg_card, self.auto_card, breakpoint=900))
 
-        # ---- KPI grid
-        grid = QGridLayout()
-        grid.setSpacing(14)
+        # ---- KPI grid (6, 4, 3 or 2 columns depending on the width, so values never get cut)
         names = ["Balance", "Equity", "Floating P&L", "Daily P&L", "Free margin", "Drawdown",
                  "Positions", "Pending orders", "Signals today", "Executed today", "Rejected today",
                  "Review queue"]
         self.k = {n: Kpi(n) for n in names}
-        for i, n in enumerate(names):
-            grid.addWidget(self.k[n], i // 6, i % 6)
-        self.body.addLayout(grid)
+        self.body.addWidget(ResponsiveGrid([self.k[n] for n in names], min_width=195))
 
         risk = Card("Risk utilisation")
         self.risk_meter = Meter()
@@ -70,8 +69,8 @@ class DashboardPage(Page):
         c3 = Card("Daily P&L (closed signals)").add(self.pnl)
         c4 = Card("Win rate").add(self.donut)
         c5 = Card("Trades by symbol").add(self.dist)
-        self.body.addLayout(hbox(c1, c2, spacing=16))
-        self.body.addLayout(hbox(c3, c4, c5, spacing=16))
+        self.body.addWidget(ResponsiveRow(c1, c2, breakpoint=760))
+        self.body.addWidget(ResponsiveRow(c3, c4, c5, breakpoint=900))
         self._last_stats = 0.0
 
     def refresh(self, s: Snapshot) -> None:
@@ -81,8 +80,9 @@ class DashboardPage(Page):
             self.acct_dot.set_tone("profit")
             self.acct_title.setText(f"{a.company or 'Broker'}")
             demo = a.is_demo
+            real_ok = self.svc.config.mt5.allow_real_account
             self.acct_badge.set("SANDBOX" if s.sandbox else ("PAPER" if sim else
-                                ("DEMO" if demo else "LIVE - BLOCKED")),
+                                ("DEMO" if demo else "REAL ACCOUNT" if real_ok else "LIVE - BLOCKED")),
                                 "warn" if s.sandbox else "paper" if sim else ("profit" if demo else "loss"))
             self.acct_sub.setText(f"Account {a.login} · {a.server} · {a.currency} · 1:{a.leverage} · "
                                   f"{'hedging' if a.is_hedging else 'netting'}")
@@ -106,10 +106,8 @@ class DashboardPage(Page):
         dl = f"{tg['avg_delivery_ms'] / 1000:.1f}s" if tg["avg_delivery_ms"] else "—"
         self.tg_sub.setText(f"ping {lat} · avg delivery {dl} · {tg['messages']} msgs · "
                             f"{tg['reconnects']} reconnects")
-        mode_text = {"MONITOR": "Monitor only", "PAPER": "Paper trading", "DEMO": "DEMO auto-execution"}
-        tone = {"MONITOR": "info", "PAPER": "paper", "DEMO": "profit"}[s.mode]
-        self.auto_pill.set(s.mode, tone)
-        self.auto_title.setText(mode_text[s.mode])
+        self.auto_pill.set("REAL" if s.mode == "LIVE" else s.mode, MODE_TONE[s.mode])
+        self.auto_title.setText(MODE_TEXT[s.mode])
         self.auto_sub.setText(s.blocking_reason or ("No lockouts · " +
                               ("execution confirmed for this account" if s.confirmed
                                else "first execution not yet confirmed")))

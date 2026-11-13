@@ -11,8 +11,8 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QBoxLayout, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
+    QLabel, QLayout, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from tgmt5.ui.theme import palette
@@ -106,7 +106,7 @@ class Pill(QLabel):
             f"QLabel {{ color: {c.name()}; background: rgba({bg.red()},{bg.green()},{bg.blue()},0.16);"
             f" border: 1px solid rgba({c.red()},{c.green()},{c.blue()},0.45); border-radius: 9px;"
             f" padding: 2px 9px; font-size: 11px; font-weight: 700; }}")
-        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)    # a pill never clips its text
 
 
 class Dot(QWidget):
@@ -151,6 +151,7 @@ class Kpi(Card):
         self.value = label(value, "kpi")
         self.sub = label(sub, "muted")
         self.lay.setSpacing(4)
+        self.sub.setWordWrap(True)
         self.add(self.title).add(self.value).add(self.sub)
         self.setMinimumWidth(150)
 
@@ -537,6 +538,114 @@ class Toast(QFrame):
             Toast._stack.remove(self)
         self.deleteLater()
         Toast._relayout()
+
+
+class ReviewTick(QToolButton):
+    """Red ✓ button next to a critical setting. Clicking it marks the setting as reviewed:
+    the button and its fields go back to the normal theme colours. ``set_pending`` turns
+    the fields red again (e.g. after the value changed)."""
+
+    def __init__(self, key: str, *fields: QWidget) -> None:
+        super().__init__()
+        self.key = key
+        self.fields = list(fields)
+        self.setObjectName("ReviewTick")
+        self.setText("✓")
+        self.setCheckable(True)
+        self.setFixedSize(28, 28)
+        self.setCursor(Qt.PointingHandCursor)
+        self.set_pending(True)
+
+    def set_pending(self, pending: bool) -> None:
+        self.blockSignals(True)
+        self.setChecked(not pending)
+        self.blockSignals(False)
+        self.setToolTip("Not reviewed yet: check this setting, then click ✓" if pending else
+                        "Reviewed. Changing the value makes it red again; click to un-tick.")
+        for w in self.fields:
+            _set_review_prop(w, "pending" if pending else "")
+
+    def set_required(self, required: bool) -> None:
+        """Hide the tick (and drop the red marking) for settings that do not apply right now."""
+        self.setVisible(required)
+        if not required:
+            for w in self.fields:
+                _set_review_prop(w, "")
+
+
+def _as_widget(item) -> QWidget:
+    if isinstance(item, QWidget):
+        return item
+    w = QWidget()
+    w.setLayout(item)
+    return w
+
+
+class ResponsiveRow(QWidget):
+    """Widgets side by side when the row is at least ``breakpoint`` px wide, stacked otherwise."""
+
+    def __init__(self, *items, breakpoint: int = 900, spacing: int = 16,
+                 stretches: Sequence[int] | None = None) -> None:
+        super().__init__()
+        self._bp = breakpoint
+        self._lay = QBoxLayout(QBoxLayout.LeftToRight, self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(spacing)
+        # the row must be allowed to get narrower than its side-by-side minimum, otherwise it could
+        # never drop below the breakpoint and switch to the stacked layout
+        self._lay.setSizeConstraint(QLayout.SetNoConstraint)
+        self._widgets = [_as_widget(it) for it in items]
+        for i, w in enumerate(self._widgets):
+            self._lay.addWidget(w, stretches[i] if stretches else 1)
+
+    def minimumSizeHint(self) -> QSize:
+        w = max((x.minimumSizeHint().width() for x in self._widgets), default=0)
+        return QSize(w, self._lay.minimumSize().height())
+
+    def resizeEvent(self, e) -> None:
+        d = QBoxLayout.LeftToRight if self.width() >= self._bp else QBoxLayout.TopToBottom
+        if self._lay.direction() != d:
+            self._lay.setDirection(d)
+        super().resizeEvent(e)
+
+
+class ResponsiveGrid(QWidget):
+    """Grid that re-flows its widgets into as many columns (from ``columns``) as fit."""
+
+    def __init__(self, widgets: Sequence[QWidget], *, min_width: int = 200,
+                 columns: Sequence[int] = (6, 4, 3, 2, 1), spacing: int = 14) -> None:
+        super().__init__()
+        self._items = list(widgets)
+        self._min, self._choices, self._cols = min_width, tuple(columns), 0
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(spacing)
+        self._place(self._choices[0])
+
+    def _place(self, cols: int) -> None:
+        if cols == self._cols:
+            return
+        for w in self._items:
+            self._grid.removeWidget(w)
+        for c in range(max(self._cols, cols)):
+            self._grid.setColumnStretch(c, 1 if c < cols else 0)
+        for i, w in enumerate(self._items):
+            self._grid.addWidget(w, i // cols, i % cols)
+        self._cols = cols
+
+    def resizeEvent(self, e) -> None:
+        sp = self._grid.spacing()
+        fit = next((c for c in self._choices if c * self._min + (c - 1) * sp <= self.width()), 1)
+        self._place(fit)
+        super().resizeEvent(e)
+
+
+def _set_review_prop(w: QWidget, value: str) -> None:
+    if w.property("review") == value:
+        return
+    w.setProperty("review", value)
+    w.style().unpolish(w)
+    w.style().polish(w)
 
 
 def hbox(*widgets, spacing: int = 12, margins=(0, 0, 0, 0)) -> QHBoxLayout:

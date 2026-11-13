@@ -6,7 +6,7 @@
 |---|---|
 | `tgmt5.domain` | Plain dataclasses and enums (signals, statuses, decisions). No I/O. |
 | `tgmt5.parsing` | Deterministic parser plus symbol aliases. Pure function: text in, `ParseResult` out. |
-| `tgmt5.mt5` | `MT5Gateway` protocol; `RealMT5Gateway` (official package), `SimBroker` (fake and paper), `DemoOnlyGateway` guard, `SymbolResolver`. |
+| `tgmt5.mt5` | `MT5Gateway` protocol; `RealMT5Gateway` (official package), `SimBroker` (fake and paper), `AccountGuard` (DEMO by default; real accounts only in REAL ACCOUNT mode), `SymbolResolver`. |
 | `tgmt5.risk` | `sizing` (broker-spec lot sizing) and `RiskEngine` (limits and persisted lockouts). |
 | `tgmt5.execution` | `ExecutionEngine` (pipeline and state machine), `management` (follow-ups, BE/TP/trailing, sync), `recovery`. |
 | `tgmt5.telegram` | Telethon adapter and a scriptable fake source. |

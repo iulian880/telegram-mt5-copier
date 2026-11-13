@@ -45,6 +45,12 @@ FONT_STACK = '"Segoe UI Variable Text", "Segoe UI", "Inter", "Helvetica Neue", A
 MONO_STACK = '"Cascadia Mono", "JetBrains Mono", Consolas, "DejaVu Sans Mono", monospace'
 
 
+def _rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def stylesheet(p: Palette) -> str:
     return f"""
 * {{ font-family: {FONT_STACK}; font-size: 13px; color: {p.text}; }}
@@ -108,6 +114,14 @@ QTabBar::tab {{ background: transparent; color: {p.muted}; padding: 8px 14px; fo
                 border-bottom: 2px solid transparent; }}
 QTabBar::tab:selected {{ color: {p.text}; border-bottom-color: {p.accent}; }}
 QToolTip {{ background: {p.surface2}; color: {p.text}; border: 1px solid {p.border}; padding: 6px; }}
+QToolButton#ReviewTick {{ background: {_rgba(p.loss, 0.12)}; border: 2px solid {p.loss}; color: {p.loss};
+    border-radius: 8px; font-weight: 800; font-size: 14px; padding: 0; }}
+QToolButton#ReviewTick:hover {{ background: {_rgba(p.loss, 0.25)}; }}
+QToolButton#ReviewTick:checked {{ background: {p.surface2}; border: 1px solid {p.border}; color: {p.profit}; }}
+QToolButton#ReviewTick:checked:hover {{ border-color: {p.accent}; }}
+QLabel[review="pending"], QCheckBox[review="pending"] {{ color: {p.loss}; font-weight: 650; }}
+QComboBox[review="pending"], QSpinBox[review="pending"], QDoubleSpinBox[review="pending"],
+QLineEdit[review="pending"] {{ border: 1px solid {p.loss}; background: {_rgba(p.loss, 0.08)}; }}
 QDialog {{ background: {p.surface}; }}
 QMessageBox {{ background: {p.surface}; }}
 """

@@ -11,7 +11,7 @@
 
 #define AppName "TGMT5"
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
 #endif
 #define AppPublisher "Petcu Iulian"
 #define AppExe "TGMT5.exe"
@@ -33,9 +33,10 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
 ; {autopf} = %LOCALAPPDATA%\Programs for one user, C:\Program Files for all users.
 DefaultDirName={autopf}\{#AppName}
-DisableDirPage=no
+; on an update (same AppId found) the folder and Start-menu pages are skipped
+DisableDirPage=auto
 DefaultGroupName={#AppName}
-DisableProgramGroupPage=no
+DisableProgramGroupPage=auto
 ; Shows the "Don't create a Start Menu folder" checkbox.
 AllowNoIcons=yes
 DisableWelcomePage=no
@@ -83,6 +84,11 @@ Name: "autostart"; Description: "{cm:AutoStart}"; GroupDescription: "{cm:OtherOp
 Source: "..\dist\TGMT5\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
+[InstallDelete]
+; v0.1.0 put its shortcuts straight into Start > Programs; remove them so an update leaves no duplicates
+Type: files; Name: "{autoprograms}\{#AppName}.lnk"
+Type: files; Name: "{autoprograms}\{#AppName} (Sandbox demo).lnk"
+
 [Icons]
 ; {group} entries are skipped automatically when "Don't create a Start Menu folder" is ticked.
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -95,6 +101,31 @@ Name: "{autostartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: autostart
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+// Before files are replaced (install or update), back up the settings/history database.
+// Settings are never overwritten by setup; this copy is an extra safety net.
+procedure BackupFile(const Src, DestDir: String);
+begin
+  if FileExists(Src) then
+    FileCopy(Src, AddBackslash(DestDir) + ExtractFileName(Src), False);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  DataDir, Dest: String;
+begin
+  if CurStep <> ssInstall then Exit;
+  DataDir := ExpandConstant('{localappdata}\{#AppName}');
+  if not FileExists(DataDir + '\tgmt5.db') then Exit;
+  Dest := DataDir + '\backups\before-update-{#AppVersion}-' + GetDateTimeString('yyyymmdd-hhnnss', #0, #0);
+  if ForceDirectories(Dest) then
+  begin
+    BackupFile(DataDir + '\tgmt5.db', Dest);
+    BackupFile(DataDir + '\tgmt5.db-wal', Dest);
+    BackupFile(DataDir + '\tgmt5.db-shm', Dest);
+    Log('Settings backed up to ' + Dest);
+  end;
+end;
+
 // On uninstall, optionally remove the per-user data folder and the keyring entries
 // (keyring stores them in Credential Manager as "<key>@tgmt5", and the first one as plain "tgmt5").
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

@@ -1,12 +1,12 @@
 # TGMT5: Telegram → MetaTrader 5 copy trading
 
-A Windows desktop application that reads trading signals from private Telegram groups you belong to, interprets them with a deterministic parser, runs every trade through a risk engine and executes it on a **MetaTrader 5 DEMO account** (built and tested against an IC Markets SC demo account model).
+A Windows desktop application that reads trading signals from private Telegram groups you belong to, interprets them with a deterministic parser, runs every trade through a risk engine and executes it on **MetaTrader 5**: a DEMO account by default, or a real-money account in the opt-in **REAL ACCOUNT** mode (built and tested against an IC Markets SC account model).
 
-It starts in **monitor-only** mode, refuses non-demo accounts at the backend level, and never trades on a signal it cannot interpret with certainty.
+It starts in **monitor-only** mode, refuses real-money accounts at the backend level unless you explicitly allow them and confirm the account by typing its number, and never trades on a signal it cannot interpret with certainty.
 
 ![Dashboard](docs/screenshots/01-dashboard.png)
 
-> **Risk disclaimer.** This is an educational / portfolio project. It is restricted to demo accounts on purpose. Trading leveraged products such as forex and CFDs carries a high risk of losing money. Nothing in this repository is financial advice, and simulated or demo results do not predict live results. Use at your own risk; see [LICENSE](LICENSE).
+> **Risk disclaimer.** This is an educational / portfolio project. Real-money trading is off by default; if you turn it on, every loss is yours. Trading leveraged products such as forex and CFDs carries a high risk of losing money. Nothing in this repository is financial advice, and simulated or demo results do not predict live results. Use at your own risk; see [LICENSE](LICENSE).
 
 ## Highlights
 
@@ -14,7 +14,7 @@ It starts in **monitor-only** mode, refuses non-demo accounts at the backend lev
 - **Lot sizing from the broker's own specs.** The loss at the stop is computed with `order_calc_profit()`, so currency conversion, contract size and tick value always come from the terminal. Volumes are rounded **down** to the broker's step, and a signal is rejected if even the minimum lot exceeds the risk budget. The whole risk budget for a signal is split across its TP legs, so three targets never mean three times the risk.
 - **Risk engine.** Limits cover risk per signal and total open risk, a daily-loss lockout, a max-drawdown lockout, a consecutive-loss breaker, trade frequency, concurrent trades, per-symbol and correlated exposure, margin usage, free margin, spread, slippage, entry deviation, R:R, sessions and white/blacklists. Lockouts survive restarts.
 - **Execution without duplicates.** Each order is written to SQLite with a unique client tag *before* it is sent. If the result is a timeout or connection loss, the leg becomes `UNCERTAIN` and is reconciled against MT5 positions, orders and deal history before any retry is allowed.
-- **DEMO-only, twice.** The account is checked when connecting, and again on *every* trade request (`trade_mode == DEMO`, plus the configured login and server). If a live account is detected, the app engages a persistent emergency stop.
+- **Account guard, twice.** The account is checked when connecting, and again on *every* trade request (account type, configured login and server). Real-money accounts need three explicit steps: *Allow real-money accounts*, REAL ACCOUNT mode, and a typed confirmation of the account number. In any other mode a real account can only have its positions closed or protected; a new order on it engages a persistent emergency stop.
 - **Restart recovery.** On start-up the app reconciles uncertain orders, positions closed while it was offline, expired waiting signals and unknown positions that carry its magic number. Old Telegram messages are never replayed.
 - **Paper trading** uses live MT5 prices with modelled spread, slippage and commission. Its results are stored and shown separately from demo results.
 - **Desktop UI** built with PySide6 and custom-painted charts. Screens: dashboard, live signal monitor with a status timeline, positions, risk console with estimated consequences, Telegram sources, analytics and a searchable audit log.
@@ -40,7 +40,7 @@ It starts in **monitor-only** mode, refuses non-demo accounts at the backend lev
                               │     ├─ RiskEngine    (limits, lockouts; persisted)
                               │     ├─ sizing        (order_calc_profit, volume step/min/max)
                               │     └─ management    (BE, partials, trailing, follow-ups)
-                              ├─ DemoOnlyGateway ──► MT5Gateway (MetaTrader5 | Paper | Fake)
+                              ├─ AccountGuard ─────► MT5Gateway (MetaTrader5 | Paper | Fake)
                               └─ SQLite (SQLAlchemy + Alembic) — audit trail of every decision
         ▲
  PySide6 UI (qasync) ── calls AppService only; it has no access to order sending
@@ -57,7 +57,7 @@ Get both files from the [latest release](https://github.com/iulian880/telegram-m
 | `TGMT5-Setup-<version>.exe` | You want a normal install. The wizard lets you choose me only or all users, the install folder, the Start-menu folder (or none), a desktop shortcut, start with Windows, and more. |
 | `TGMT5-Portable-<version>.exe` | You want one self-contained file to copy and run, with no install. It keeps its data next to the `.exe`. |
 
-You also need the MetaTrader 5 terminal for real (demo) trading. `--sandbox` works without it. The files are signed with a self-signed test certificate, so Windows SmartScreen will warn you: click **More info → Run anyway**. Details are in [INSTALL_WINDOWS.md](docs/INSTALL_WINDOWS.md).
+You also need the MetaTrader 5 terminal for real (demo) trading. `--sandbox` works without it. The files are signed with a self-signed test certificate, so Windows SmartScreen will warn you: click **More info → Run anyway**. Details are in [INSTALL_WINDOWS.md](docs/INSTALL_WINDOWS.md). **Updating:** run the new Setup over the installed version; your settings, history and passwords are kept, and the database is backed up first.
 
 ## Quick start (from source)
 
@@ -81,7 +81,7 @@ Full guides:
 ## Tests
 
 ```bash
-pytest -q                    # 177 tests, no credentials or broker needed
+pytest -q                    # 206 tests, no credentials or broker needed
 pytest -m demo_e2e -s        # optional real DEMO round trip (Windows, explicit opt-in)
 ```
 

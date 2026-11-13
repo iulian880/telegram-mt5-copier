@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QFrame, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QStackedWidget,
-    QSystemTrayIcon, QVBoxLayout, QWidget,
+    QButtonGroup, QFrame, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QSizePolicy,
+    QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from tgmt5.services.app import AppService, Snapshot
@@ -35,6 +35,7 @@ class MainWindow(QMainWindow):
         self.svc = svc
         self.setWindowTitle("TGMT5 — Telegram → MetaTrader 5" + ("  [SANDBOX]" if svc.sandbox else ""))
         self.resize(1480, 940)
+        self.setMinimumSize(1024, 640)
         root = QWidget()
         root.setObjectName("Root")
         outer = QHBoxLayout(root)
@@ -71,7 +72,8 @@ class MainWindow(QMainWindow):
         sl.addStretch()
         self.review_badge = label("", "muted", wrap=True)
         sl.addWidget(self.review_badge)
-        sl.addWidget(label("DEMO accounts only.\nLive trading is blocked.", "muted", wrap=True))
+        self.account_note = label("", "muted", wrap=True)
+        sl.addWidget(self.account_note)
         outer.addWidget(side)
 
         # ---- top bar
@@ -81,11 +83,12 @@ class MainWindow(QMainWindow):
         top.setObjectName("TopBar")
         top.setFixedHeight(64)
         self.mode_pill = Pill("MONITOR", "info")
-        self.sandbox_pill = Pill("SANDBOX — SIMULATED BROKER & TELEGRAM", "warn")
+        self.sandbox_pill = Pill("SANDBOX · SIMULATED", "warn")
         self.sandbox_pill.setVisible(svc.sandbox)
         self.mt5_dot, self.tg_dot = Dot(), Dot()
         self.mt5_lbl, self.tg_lbl = label("MT5", "muted"), label("Telegram", "muted")
         self.lock_lbl = label("", wrap=False)
+        self.lock_lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # never widens the bar
         self.stop = QPushButton("EMERGENCY STOP")
         self.stop.setObjectName("Stop")
         self.stop.setCursor(Qt.PointingHandCursor)
@@ -140,9 +143,13 @@ class MainWindow(QMainWindow):
         run_async(self.svc.snapshot(), done, fail)
 
     def _apply(self, s: Snapshot) -> None:
-        tone = {"MONITOR": "info", "PAPER": "paper", "DEMO": "profit"}[s.mode]
+        tone = {"MONITOR": "info", "PAPER": "paper", "DEMO": "profit", "LIVE": "loss"}[s.mode]
         self.mode_pill.set({"MONITOR": "MONITOR ONLY", "PAPER": "PAPER TRADING",
-                            "DEMO": "DEMO AUTO-EXECUTION"}[s.mode], tone)
+                            "DEMO": "DEMO AUTO-EXECUTION", "LIVE": "REAL ACCOUNT · REAL MONEY"}[s.mode], tone)
+        self.account_note.setText("Real-money accounts allowed\n(REAL ACCOUNT mode)."
+                                  if self.svc.config.mt5.allow_real_account else
+                                  "DEMO accounts only.\nReal-money trading is off.")
+        self.lock_lbl.setToolTip(s.blocking_reason or "")
         self.mt5_dot.set_tone("profit" if s.mt5_connected else "loss")
         tg = s.telegram
         self.tg_dot.set_tone("profit" if tg["connected"] and tg["authorized"] else

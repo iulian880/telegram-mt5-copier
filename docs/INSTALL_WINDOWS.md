@@ -63,6 +63,17 @@ To install silently, use `TGMT5-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXE
 
 To uninstall, use **Settings → Apps → TGMT5**. The uninstaller asks whether to delete your data in `%LOCALAPPDATA%\TGMT5` and the credentials saved in Credential Manager. The default is **No**, so they are kept for a later reinstall. A silent uninstall always keeps them.
 
+## Updating (keeps your settings)
+Run the new `TGMT5-Setup-<version>.exe` over the installed version. There is nothing to uninstall first, and nothing to export:
+- Your settings, signal history and Telegram session live in `%LOCALAPPDATA%\TGMT5`, and your passwords in Windows Credential Manager. Setup never overwrites them.
+- Setup finds the existing installation and updates it in place. It skips the folder and Start-menu pages and closes TGMT5 if it is running.
+- Before replacing any file it copies the database to `%LOCALAPPDATA%\TGMT5\backups\before-update-<version>-<date>\` as an extra safety net.
+- After an update, new critical risk settings (or ones whose meaning changed) show up **red** on the Risk page once. Tick them again before switching DEMO / REAL ACCOUNT execution back on.
+
+**Portable version:** replace only the `.exe` and keep the `TGMT5-data` folder next to it.
+
+**Restore a backup:** close TGMT5 and copy the files from a `backups\before-update-…` folder back to `%LOCALAPPDATA%\TGMT5`. You can also keep your own copy with *Connection → Export config…* (settings only, no passwords).
+
 ## Portable version (no installation)
 `TGMT5-Portable-<version>.exe` is a single self-contained file. Copy it anywhere, such as a USB stick or a shared folder, and run it. It needs no install and no admin rights, and it adds no shortcuts or uninstall entry. This makes it the easiest version to give to someone else.
 

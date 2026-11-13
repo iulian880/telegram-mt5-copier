@@ -26,6 +26,7 @@ async def svc(tmp_path):
     s = AppService(tmp_path, secrets=secrets, telegram=tg, gateway_factory=lambda: broker, db=db)
     s.config = AppConfig(sources=[SourceConfig(chat_id=SOURCE, title="VIP")],
                          mt5=MT5Settings(login=broker.login, server=broker.server))
+    s.config.mark_all_reviewed()       # pre-trade review done (tested separately)
     await s.start()
     s.broker, s.tg = broker, tg
     yield s
@@ -146,6 +147,7 @@ async def test_paper_mode_models_costs(svc):
 async def test_concurrent_signals_processed_serially_within_limits(svc):
     svc.config.risk.max_concurrent_trades = 2
     svc.config.execution.cross_source_dedup_seconds = 0
+    svc.config.mark_all_reviewed()     # a changed critical field must be ticked again
     await svc.connect_mt5("pw")
     await svc.confirm_automated_execution()
     await svc.set_mode(ExecutionMode.DEMO)

@@ -13,7 +13,7 @@ from tgmt5.config import SourceConfig
 from tgmt5.secrets import SecretStore
 from tgmt5.services.app import Snapshot
 from tgmt5.ui.pages.base import Page
-from tgmt5.ui.widgets import Card, Dot, Toast, hbox, label, run_async
+from tgmt5.ui.widgets import Card, Dot, ResponsiveRow, Toast, hbox, label, run_async
 
 SRC_COLS = ["Enabled", "Chat ID", "Name", "Risk ×", "Symbol aliases (GOLD=XAUUSD, …)", "Parser template"]
 
@@ -65,7 +65,7 @@ class SourcesPage(Page):
                                                         "Listener started" if ok else "Listener not started — see log",
                                                         "profit" if ok else "warn")))
         diag.add(layout=hbox("stretch", reconnect))
-        self.body.addLayout(hbox(auth, diag, spacing=16))
+        self.body.addWidget(ResponsiveRow(auth, diag, breakpoint=860))
 
         dl = Card("My groups & channels")
         self.dialogs = QTableWidget(0, 3)

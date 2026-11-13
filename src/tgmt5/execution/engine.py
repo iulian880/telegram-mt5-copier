@@ -30,7 +30,7 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tgmt5.config import AppConfig, SizingMode, TpStrategy, ZonePolicy
+from tgmt5.config import AppConfig, TpStrategy, ZonePolicy
 from tgmt5.domain.models import (
     Decision, Direction, EntryType, ExecutionMode, ManagementInstruction, ManagementType,
     MessageEventType, MessageKind, ParsedSignal, SignalStatus, TelegramMessage,
@@ -48,7 +48,7 @@ from tgmt5.persistence.db import Database
 from tgmt5.persistence.models import ExecutionRow, SignalEventRow, SignalRow, TelegramMessageRow
 from tgmt5.risk.engine import OpenRisk, RiskEngine, TradeProposal, position_open_risk
 from tgmt5.risk.sizing import (
-    SizingError, fixed_lot, floor_to_step, loss_at_stop, size_for_risk, split_volume,
+    SizingError, floor_to_step, loss_at_stop, plan_volumes, tp_layout,
 )
 
 log = logging.getLogger(__name__)
@@ -348,12 +348,15 @@ class ExecutionEngine:
                 self._transition(s, sig, SignalStatus.MONITORED,
                                  "monitor-only mode: no order sent")
                 return SignalStatus.MONITORED
-            if self.mode is ExecutionMode.DEMO:
+            if self.mode in (ExecutionMode.DEMO, ExecutionMode.LIVE):
                 acct = self.account
                 key = f"{acct.login}@{acct.server}" if acct else ""
-                if not acct or self.risk.state.confirmed_account != key:
+                live = self.mode is ExecutionMode.LIVE
+                confirmed = self.risk.state.confirmed_real_account if live else self.risk.state.confirmed_account
+                if not acct or confirmed != key:
                     self._transition(s, sig, SignalStatus.REJECTED,
-                                     "automated execution not confirmed for this DEMO account")
+                                     f"automated execution not confirmed for this "
+                                     f"{'REAL' if live else 'DEMO'} account")
                     return SignalStatus.REJECTED
             self._transition(s, sig, SignalStatus.QUEUED, "queued for execution")
         return self._execute(sig_id, plan)
@@ -452,26 +455,27 @@ class ExecutionEngine:
         if not d.approved:
             return self._dummy_plan(spec, broker_sym)
 
-        # ---- sizing
+        # ---- sizing (shared with the Risk page preview: tgmt5.risk.sizing.plan_volumes)
         src = cfg.source(sig.source_id)
         mult = (src.risk_multiplier if src else 1.0) * (prof.risk_multiplier if prof else 1.0)
-        budget = self.risk.risk_budget(acct, mult)
-        try:
-            max_vol = min(cfg.risk.max_lot_per_order *
-                          max(1, len(p.take_profits)), cfg.risk.max_lots_per_symbol)
-            if cfg.risk.sizing_mode is SizingMode.FIXED_LOT:
-                sz = fixed_lot(self.gw, spec, p.direction, price, p.stop_loss, cfg.risk.fixed_lot * mult)
-            else:
-                sz = size_for_risk(self.gw, spec, p.direction, price, p.stop_loss, budget, max_vol)
-        except SizingError as e:
-            d.add("sizing", False, str(e))
+        strategy, positions, covered = tp_layout(ex.tp_strategy, len(p.take_profits), acct.is_hedging)
+        gw, direction, sl = self.gw, p.direction, p.stop_loss
+        sz = plan_volumes(cfg.risk, positions=positions, tps_covered=covered, allocation=ex.tp_allocation,
+                          spec=spec, loss_fn=lambda v: loss_at_stop(gw, spec, direction, v, price, sl)[0],
+                          equity=acct.equity, balance=acct.balance, multiplier=mult,
+                          max_total=min(cfg.risk.max_lot_per_order * max(1, len(p.take_profits)),
+                                        cfg.risk.max_lots_per_symbol))
+        if sz.error:
+            d.add("sizing", False, sz.error)
             return self._dummy_plan(spec, broker_sym)
+        for note in sz.notes:
+            self.audit_app("INFO", "execution", f"{p.symbol}: {note}")
 
-        legs, managed = self._plan_legs(sz.volume, p, spec, acct)
+        legs, managed = self._legs_for(sz.volumes, p, strategy)
         total = round(sum(l.volume for l in legs), 8)
-        risk_money, _ = loss_at_stop(self.gw, spec, p.direction, total, price, p.stop_loss)
-        d.add("risk_budget", risk_money <= budget + 0.01 or cfg.risk.sizing_mode is SizingMode.FIXED_LOT,
-              f"risk {risk_money:.2f} exceeds budget {budget:.2f}")
+        risk_money = sz.risk_money
+        d.add("risk_budget", sz.within_budget,
+              f"risk {risk_money:.2f} exceeds budget {sz.budget or 0:.2f}")
         margin = self.gw.calc_margin(order_type if not pending else
                                      (OrderType.BUY if p.direction is Direction.BUY else OrderType.SELL),
                                      broker_sym, total, price)
@@ -541,27 +545,18 @@ class ExecutionEngine:
             return f"PENDING:{edge}:LIMIT"
         return f"REJECT: {why} (zone policy REJECT)"
 
-    def _plan_legs(self, total: float, p: ParsedSignal, spec: SymbolSpec,
-                   acct: AccountInfo) -> tuple[list[LegPlan], tuple[float, ...]]:
-        ex = self.cfg.execution
+    @staticmethod
+    def _legs_for(volumes: list[float], p: ParsedSignal,
+                  strategy: TpStrategy) -> tuple[list[LegPlan], tuple[float, ...]]:
+        """Turn planned volumes into order legs (one per TP when splitting)."""
         tps = list(p.take_profits)
         if not tps:
-            return [LegPlan(total, 0.0, None)], ()
-        strategy = ex.tp_strategy
-        if strategy is TpStrategy.SPLIT and not acct.is_hedging:
-            strategy = TpStrategy.SINGLE_MANAGED
-        if strategy is TpStrategy.SPLIT and len(tps) > 1:
-            weights = (ex.tp_allocation + [ex.tp_allocation[-1]] * len(tps))[:len(tps)]
-            vols = split_volume(total, weights, spec)
-            if vols:
-                return [LegPlan(v, tp, i + 1) for i, (v, tp) in enumerate(zip(vols, tps))], ()
-            self.audit_app("INFO", "execution",
-                           f"volume {total} too small to split into {len(tps)} legs; "
-                           f"single position with TP1")
-            return [LegPlan(total, tps[0], 1)], ()
+            return [LegPlan(volumes[0], 0.0, None)], ()
+        if strategy is TpStrategy.SPLIT and len(tps) > 1 and len(volumes) > 1:
+            return [LegPlan(v, tps[i], i + 1) for i, v in enumerate(volumes)], ()
         if strategy is TpStrategy.SINGLE_MANAGED and len(tps) > 1:
-            return [LegPlan(total, tps[-1], len(tps))], tuple(tps[:-1])
-        return [LegPlan(total, tps[0], 1)], ()
+            return [LegPlan(volumes[0], tps[-1], len(tps))], tuple(tps[:-1])
+        return [LegPlan(volumes[0], tps[0], 1)], ()
 
     # ------------------------------------------------------------- execution
     def _filling_modes(self, spec: SymbolSpec, pending: bool) -> list[int]:

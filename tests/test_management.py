@@ -202,11 +202,11 @@ def test_first_tp_only_strategy(h):
     assert [p.tp for p in h.broker.positions()] == [2670]
 
 
-def test_small_volume_falls_back_to_single_position(h):
-    h.cfg.risk.risk_percent = 0.25        # $25 -> 0.02 lot: cannot split in 3
+def test_small_volume_uses_as_many_tps_as_possible(h):
+    h.cfg.risk.risk_percent = 0.25        # $25 -> 0.02 lot: cannot split in 3, but in 2
     sid = h.send(GOLD3)
     assert st(h, sid) is SignalStatus.EXECUTED
-    assert [p.tp for p in h.broker.positions()] == [2670]
+    assert sorted((p.tp, p.volume) for p in h.broker.positions()) == [(2670, 0.01), (2680, 0.01)]
 
 
 def test_pending_order_expiry(h):

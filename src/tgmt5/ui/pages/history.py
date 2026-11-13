@@ -3,14 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFrame, QGridLayout, QHeaderView, QPushButton, QTableWidget,
-    QTableWidgetItem,
+    QComboBox, QFileDialog, QFrame, QHeaderView, QPushButton, QTableWidget, QTableWidgetItem,
 )
 
 from tgmt5.analytics.stats import compute, export_csv, outcomes
 from tgmt5.services.app import Snapshot
 from tgmt5.ui.pages.base import Page
-from tgmt5.ui.widgets import BarChart, Card, Kpi, LineChart, Toast, hbox, label, money, vbox
+from tgmt5.ui.widgets import (
+    BarChart, Card, Kpi, LineChart, ResponsiveGrid, ResponsiveRow, Toast, hbox, label, money, vbox,
+)
 
 
 def _table(cols: list[str], h: int = 180) -> QTableWidget:
@@ -50,23 +51,21 @@ class HistoryPage(Page):
         self.banner.setLayout(vbox(self.banner_text, margins=(14, 10, 14, 10)))
         self.body.addWidget(self.banner)
 
-        grid = QGridLayout()
-        grid.setSpacing(14)
         names = ["Total trades", "Win rate", "Profit factor", "Expectancy", "Average win", "Average loss",
                  "Net P&L", "Max drawdown", "Average R", "Exec latency", "Avg slippage", "Avg spread"]
         self.k = {n: Kpi(n) for n in names}
-        for i, n in enumerate(names):
-            grid.addWidget(self.k[n], i // 6, i % 6)
-        self.body.addLayout(grid)
+        self.body.addWidget(ResponsiveGrid([self.k[n] for n in names], min_width=195))
 
         self.cum = LineChart("profit")
         self.rej = BarChart(signed=False, tone="warn", horizontal=True)
-        self.body.addLayout(hbox(Card("Cumulative P&L").add(self.cum),
-                                 Card("Rejected / expired signals by reason").add(self.rej), spacing=16))
+        self.body.addWidget(ResponsiveRow(Card("Cumulative P&L").add(self.cum),
+                                          Card("Rejected / expired signals by reason").add(self.rej),
+                                          breakpoint=820))
         self.sym = _table(["Symbol", "Trades", "Win rate", "Net"])
         self.src = _table(["Provider", "Trades", "Win rate", "Net"])
-        self.body.addLayout(hbox(Card("Performance per symbol").add(self.sym),
-                                 Card("Performance per signal provider").add(self.src), spacing=16))
+        self.body.addWidget(ResponsiveRow(Card("Performance per symbol").add(self.sym),
+                                          Card("Performance per signal provider").add(self.src),
+                                          breakpoint=820))
         self.lat = label("", "muted", wrap=True)
         self.body.addWidget(Card("Execution quality").add(self.lat))
         self.trades = _table(["Signal", "Symbol", "Side", "Opened", "Closed", "Net", "R"], 260)

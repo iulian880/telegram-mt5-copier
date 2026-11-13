@@ -5,7 +5,9 @@
 | `MetaTrader5 package is not available` | Windows only. Run `pip install MetaTrader5` in the venv and use 64-bit Python. |
 | `MT5 initialize failed: [-6] Authorization failed` | Wrong login, password or server. Log in once by hand in the terminal and copy the exact server name. |
 | `MT5 initialize failed: [-10005] IPC timeout` | The terminal is starting or busy. Start MT5 first and select the right `terminal64.exe` if you have several. |
-| `Account … is NOT a demo account` | Working as designed: live accounts are refused. Log the terminal in to your demo account. |
+| `Account … is NOT a demo account` | Real-money accounts are refused by default. Log the terminal in to your demo account, or switch on *Allow real-money accounts* in Connection and use REAL ACCOUNT mode. |
+| `REAL ACCOUNT execution has not been confirmed` | Choose REAL ACCOUNT in Connection → Apply mode, tick the risk statement and type the account number. |
+| `Review the red risk settings first` | Open Risk and tick every red setting (✓). Changed values must be ticked again. |
 | `Algo Trading is disabled in the terminal` (retcode 10027) | Turn on the **Algo Trading** button in MT5. |
 | `symbol XAUUSD not found (or ambiguous)` | The broker uses a suffix or several variants. Set **Symbol suffix** in Connection, or add an alias on the source. |
 | `Unsupported filling mode` (10030) | The app retries with the next mode the symbol allows (FOK → IOC → RETURN). If it still fails, see the log. |

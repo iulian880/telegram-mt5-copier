@@ -87,6 +87,7 @@ class ExecutionMode(str, enum.Enum):
     MONITOR = "MONITOR"    # parse + validate only, never send orders (safe default)
     PAPER = "PAPER"        # simulate fills locally with real prices
     DEMO = "DEMO"          # send orders to a verified MT5 DEMO account
+    LIVE = "LIVE"          # "REAL ACCOUNT": send orders to a real-money account (explicit opt-in + typed confirmation)
 
 
 class MessageEventType(str, enum.Enum):

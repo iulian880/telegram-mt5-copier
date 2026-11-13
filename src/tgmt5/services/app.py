@@ -30,7 +30,7 @@ from tgmt5.execution.engine import ExecutionEngine
 from tgmt5.execution.legs import LegState
 from tgmt5.execution.management import cancel_pending_leg, close_leg
 from tgmt5.execution.recovery import RecoveryReport, recover
-from tgmt5.mt5.guard import DemoOnlyGateway
+from tgmt5.mt5.guard import AccountGuard, is_risk_reducing
 from tgmt5.mt5.interface import (
     AccountInfo, ConnectParams, GatewayError, LiveAccountBlocked, MT5Gateway, TradeRequest,
     TradeResult,
@@ -38,7 +38,10 @@ from tgmt5.mt5.interface import (
 from tgmt5.mt5.sim import PaperGateway, _Pos
 from tgmt5.persistence.db import Database
 from tgmt5.persistence.models import EquitySnapshotRow, ExecutionRow, SignalRow
+from tgmt5.domain.models import Direction
+from tgmt5.review import REVIEW_LABELS, pending_reviews
 from tgmt5.risk.engine import RiskEngine
+from tgmt5.risk.preview import DEFAULT_SYMBOLS, ExampleSignal, SizingPreview, build_preview
 from tgmt5.secrets import SecretStore
 from tgmt5.telegram.client import TelegramSource
 
@@ -101,7 +104,7 @@ class AppService:
                                       mode=ExecutionMode.MONITOR, emit=self._emit)
         self.queue: asyncio.Queue[TelegramMessage] = asyncio.Queue(maxsize=1000)
         self.listeners: list[Listener] = []
-        self.real_gw: DemoOnlyGateway | None = None
+        self.real_gw: AccountGuard | None = None
         self.paper_gw: PaperGateway | None = None
         self._connect_params: ConnectParams | None = None
         self._tasks: list[asyncio.Task] = []
@@ -267,7 +270,7 @@ class AppService:
     async def connect_mt5(self, password: str | None = None, *, save_password: bool = False) -> AccountInfo:
         cfg = self.config.mt5
         if cfg.login is None or not cfg.server:
-            raise ValueError("Configure the DEMO account number and server first")
+            raise ValueError("Configure the account number and server first")
         if password is None:
             password = self.secrets.get(SecretStore.mt5_password_key(cfg.login))
         elif save_password:
@@ -277,8 +280,10 @@ class AppService:
 
         def _do() -> AccountInfo:
             inner = self.gateway_factory()
-            guard = DemoOnlyGateway(inner, cfg.login, cfg.server)
-            acct = guard.connect(params)          # raises LiveAccountBlocked for non-demo
+            guard = AccountGuard(inner, cfg.login, cfg.server,
+                                 allow_real_connect=lambda: self.config.mt5.allow_real_account,
+                                 allow_real_send=self._real_send_allowed)
+            acct = guard.connect(params)          # raises LiveAccountBlocked for a refused real account
             if cfg.expected_currency and acct.currency != cfg.expected_currency:
                 guard.disconnect()
                 raise GatewayError(f"account currency {acct.currency} != expected {cfg.expected_currency}")
@@ -288,9 +293,10 @@ class AppService:
             self.risk.mt5_unstable = False
             self.engine.set_mode(ExecutionMode.MONITOR, ReadOnlyGateway(guard))
             self.engine.resolver.suffix = cfg.symbol_suffix
-            self.last_recovery = recover(self._recovery_engine(ExecutionMode.DEMO, guard))
-            self.engine.audit_app("INFO", "mt5",
-                                  f"Connected to DEMO account {acct.login} on {acct.server} "
+            self.last_recovery = recover(self._recovery_engine(self._broker_mode(acct), guard))
+            kind = "DEMO" if acct.is_demo else "REAL-MONEY"
+            self.engine.audit_app("INFO" if acct.is_demo else "WARNING", "mt5",
+                                  f"Connected to {kind} account {acct.login} on {acct.server} "
                                   f"({acct.currency}, 1:{acct.leverage}, "
                                   f"{'hedging' if acct.is_hedging else 'netting'})")
             return acct
@@ -300,6 +306,39 @@ class AppService:
         except LiveAccountBlocked as e:
             self.engine.audit_app("CRITICAL", "safety", str(e))
             raise
+
+    def _real_send_allowed(self, acct: AccountInfo, req: TradeRequest) -> bool:
+        """Guard policy for real-money accounts (called before every order)."""
+        if not self.config.mt5.allow_real_account:
+            return False
+        if self.risk.state.confirmed_real_account != f"{acct.login}@{acct.server}":
+            return False
+        # new orders only in REAL ACCOUNT mode; closing / protecting positions always
+        return self.engine.mode is ExecutionMode.LIVE or is_risk_reducing(req)
+
+    def _broker_mode(self, acct: AccountInfo | None = None) -> ExecutionMode:
+        """Mode to use for helper engines that act on the connected broker account."""
+        if acct is None and self.real_gw is not None:
+            acct = self.real_gw.account_info()
+        return ExecutionMode.LIVE if acct is not None and not acct.is_demo else ExecutionMode.DEMO
+
+    async def confirm_real_account(self, typed_login: str) -> None:
+        """Typed confirmation, required once per real-money account before REAL ACCOUNT mode."""
+        def _do() -> None:
+            acct = self.real_gw.account_info() if self.real_gw else None
+            if acct is None:
+                raise ValueError("Connect the account first")
+            if acct.is_demo:
+                raise ValueError("This is a DEMO account: use DEMO auto-execution")
+            if not self.config.mt5.allow_real_account:
+                raise ValueError("Real-money accounts are not allowed (Connection settings)")
+            if typed_login.strip() != str(acct.login):
+                raise ValueError("The account number you typed does not match the connected account")
+            self.risk.state.confirmed_real_account = f"{acct.login}@{acct.server}"
+            self.risk.persist()
+            self.engine.audit_app("CRITICAL", "safety",
+                                  f"User confirmed REAL-MONEY execution for {acct.login}@{acct.server}")
+        await self.run_mt5(_do)
 
     def _recovery_engine(self, mode: ExecutionMode, gw: MT5Gateway) -> ExecutionEngine:
         return ExecutionEngine(self.db, gw, self.risk, lambda: self.config, mode=mode, emit=self._emit,
@@ -351,21 +390,43 @@ class AppService:
                     self._restore_paper_positions(self.paper_gw)
                 self.engine.set_mode(mode, self.paper_gw)
                 return
-            # DEMO
+            # DEMO or LIVE (REAL ACCOUNT)
             if self.risk.state.emergency_stop:
                 raise ValueError("Emergency stop is active - clear it first")
             acct = self.real_gw.account_info()
-            if acct is None or not acct.is_demo:
-                raise LiveAccountBlocked("Account is not a DEMO account")
-            if self.risk.state.confirmed_account != f"{acct.login}@{acct.server}":
-                raise ValueError("Automated execution has not been confirmed for this DEMO account")
+            if acct is None:
+                raise ValueError("No account information - reconnect MT5")
+            key = f"{acct.login}@{acct.server}"
+            if mode is ExecutionMode.DEMO:
+                if not acct.is_demo:
+                    raise LiveAccountBlocked("Account is not a DEMO account - use REAL ACCOUNT mode for it")
+                if self.risk.state.confirmed_account != key:
+                    raise ValueError("Automated execution has not been confirmed for this DEMO account")
+            else:
+                if self.sandbox:
+                    raise ValueError("REAL ACCOUNT mode is not available in sandbox mode")
+                if acct.is_demo:
+                    raise ValueError("This is a DEMO account: use DEMO auto-execution")
+                if not self.config.mt5.allow_real_account:
+                    raise LiveAccountBlocked("Real-money accounts are not allowed: switch on 'Allow "
+                                             "real-money accounts' in Connection first")
+                if self.risk.state.confirmed_real_account != key:
+                    raise ValueError("REAL ACCOUNT execution has not been confirmed for this account")
             if not self.config.sources or not any(s.enabled for s in self.config.sources):
                 raise ValueError("No enabled Telegram source")
+            missing = [] if self.sandbox else pending_reviews(self.config)
+            if missing:
+                raise ValueError("Review the red risk settings first (Risk page, tick each one): "
+                                 + ", ".join(REVIEW_LABELS[k] for k in missing))
             ti = self.real_gw.terminal_info()
             if ti is not None and not ti.trade_allowed:
                 raise ValueError("Algo Trading is disabled in the MT5 terminal")
             self.engine.set_mode(mode, self.real_gw)
-            self.engine.audit_app("WARNING", "safety", "DEMO auto-execution ENABLED")
+            if mode is ExecutionMode.DEMO:
+                self.engine.audit_app("WARNING", "safety", "DEMO auto-execution ENABLED")
+            else:
+                self.engine.audit_app("CRITICAL", "safety",
+                                      f"REAL ACCOUNT auto-execution ENABLED on {key} (real money)")
         await self.run_mt5(_do)
         self._emit("mode", {"mode": mode.value})
 
@@ -409,7 +470,7 @@ class AppService:
             if gw is None:
                 raise ValueError("Not connected")
             eng = self._recovery_engine(
-                ExecutionMode.PAPER if gw is self.paper_gw else ExecutionMode.DEMO, gw)
+                ExecutionMode.PAPER if gw is self.paper_gw else self._broker_mode(), gw)
             results = []
             with self.db.session() as s:
                 legs = list(s.scalars(select(ExecutionRow).where(
@@ -436,7 +497,7 @@ class AppService:
                 if isinstance(gw, ReadOnlyGateway):
                     gw = self.real_gw
                 eng = self._recovery_engine(self.engine.mode if self.engine.mode is not
-                                            ExecutionMode.MONITOR else ExecutionMode.DEMO, gw)
+                                            ExecutionMode.MONITOR else self._broker_mode(), gw)
                 return close_leg(eng, s, leg, leg.volume - leg.closed_volume, "manual close")
         return await self.run_mt5(_do)
 
@@ -452,7 +513,7 @@ class AppService:
                 if isinstance(gw, ReadOnlyGateway):
                     gw = self.real_gw
                 eng = self._recovery_engine(self.engine.mode if self.engine.mode is not
-                                            ExecutionMode.MONITOR else ExecutionMode.DEMO, gw)
+                                            ExecutionMode.MONITOR else self._broker_mode(), gw)
                 return modify_leg_sl(eng, s, leg, sl, "manual modify", new_tp=tp)
         return await self.run_mt5(_do)
 
@@ -472,12 +533,52 @@ class AppService:
     # ------------------------------------------------------------- config
     async def save_config(self, cfg: AppConfig) -> None:
         cfg = AppConfig.model_validate(cfg.model_dump())   # full validation
+        if not cfg.mt5.allow_real_account:
+            # switching real-money trading off takes effect immediately
+            if self.engine.mode is ExecutionMode.LIVE:
+                await self.set_mode(ExecutionMode.MONITOR)
+            if self.risk.state.confirmed_real_account:
+                self.risk.state.confirmed_real_account = ""
+                self.risk.persist()
         cfg.mode = self.config.mode
         self.config = cfg
         self.db.save_config(cfg)
         await self.telegram.update_chats(self.enabled_chat_ids())
         self.engine.audit_app("INFO", "config", "Configuration saved")
         self._emit("config", {})
+
+    async def sizing_preview(self, cfg: AppConfig, *, fallback_balance: float, sl_pips: float,
+                             n_tps: int, recent: bool) -> SizingPreview:
+        """Lots / risk / margin the engine would use for example signals (Risk page preview)."""
+        examples = (self._recent_examples() if recent else []) or [
+            ExampleSignal(sym, Direction.BUY, n_tps, sl_pips=sl_pips, label="typical")
+            for sym in DEFAULT_SYMBOLS]
+        gw, resolver = self.engine.gw, self.engine.resolver
+        if gw is None:
+            return build_preview(None, None, cfg, examples, fallback_balance=fallback_balance)
+        return await self.run_mt5(lambda: build_preview(gw, resolver, cfg, examples,
+                                                        fallback_balance=fallback_balance))
+
+    def _recent_examples(self, limit: int = 8) -> list[ExampleSignal]:
+        """Most recent parsed signal per symbol, as preview examples."""
+        out: dict[str, ExampleSignal] = {}
+        with self.db.session() as s:
+            rows = s.scalars(select(SignalRow).where(
+                SignalRow.kind == MessageKind.NEW_SIGNAL.value, SignalRow.stop_loss.is_not(None),
+                SignalRow.symbol.is_not(None)).order_by(SignalRow.id.desc()).limit(300))
+            for r in rows:
+                if r.symbol in out:
+                    continue
+                entry = r.entry_price if r.entry_price is not None else (
+                    (r.entry_low + r.entry_high) / 2 if r.entry_low and r.entry_high else None)
+                if entry is None:
+                    continue
+                out[r.symbol] = ExampleSignal(
+                    r.symbol, Direction(r.direction), len(r.take_profits or []), entry=entry,
+                    stop_loss=r.stop_loss, label=f"signal {r.created_at:%d.%m %H:%M}")
+                if len(out) >= limit:
+                    break
+        return list(out.values())
 
     # ------------------------------------------------------------- snapshot
     async def snapshot(self) -> Snapshot:
@@ -494,7 +595,8 @@ class AppService:
                       "latency_ms": tg.latency_ms, "reconnects": tg.reconnects,
                       "messages": tg.messages_received, "avg_delivery_ms": tg.avg_delivery_ms},
             blocking_reason=self.risk.blocking_reason(), emergency=self.risk.state.emergency_stop,
-            confirmed=bool(acct and self.risk.state.confirmed_account == f"{acct.login}@{acct.server}"),
+            confirmed=bool(acct and (self.risk.state.confirmed_real_account if not acct.is_demo else
+                                     self.risk.state.confirmed_account) == f"{acct.login}@{acct.server}"),
             queue_depth=self.queue.qsize())
         start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         sim = self.engine.simulated
