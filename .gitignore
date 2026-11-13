@@ -18,3 +18,4 @@ config.local.json
 .secrets/
 /TGMT5-Setup-*.exe
 /TGMT5-Portable-*.exe
+/TGMT5-data/
