@@ -17,6 +17,10 @@ if ($LASTEXITCODE -eq 0) {
     $signCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `$q$PSScriptRoot\sign.ps1`$q `$f"
     $isccArgs += @("/DSIGN", "/Stgmt5sign=$signCmd")
 } else { Write-Warning "No signing certificate: installer left unsigned (see packaging\sign.ps1)." }
-& $iscc @isccArgs "packaging\installer.iss"
+# ISCC starts powershell.exe (5.1) for signing. Run from PowerShell 7, that child would inherit
+# PowerShell 7's module paths and fail to load its own modules, so give it the system default.
+$savedModulePath = $env:PSModulePath
+$env:PSModulePath = [Environment]::GetEnvironmentVariable("PSModulePath", "Machine")
+try { & $iscc @isccArgs "packaging\installer.iss" } finally { $env:PSModulePath = $savedModulePath }
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
 Write-Host "Built installer: TGMT5-Setup-*.exe in the repository root"

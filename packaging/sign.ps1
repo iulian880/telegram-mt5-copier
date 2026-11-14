@@ -19,9 +19,18 @@ function Find-SignArgs {
         return $a
     }
     if ($env:TGMT5_SIGN_THUMBPRINT) { return @("/s", "My", "/sha1", $env:TGMT5_SIGN_THUMBPRINT) }
-    $dev = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
-        Where-Object { $_.Subject -eq "CN=TGMT5 Dev" -and $_.NotAfter -gt (Get-Date) } |
-        Sort-Object NotAfter -Descending | Select-Object -First 1
+    # Read the store through .NET, not the Cert: drive: Inno Setup runs this script in Windows
+    # PowerShell 5.1, and when that is started from PowerShell 7 it can fail to load the module
+    # that provides Cert: ("A parameter cannot be found that matches parameter name 'CodeSigningCert'").
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("My", "CurrentUser")
+    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+    $dev = $null
+    try {
+        foreach ($c in $store.Certificates) {
+            if ($c.Subject -eq "CN=TGMT5 Dev" -and $c.HasPrivateKey -and $c.NotAfter -gt [DateTime]::Now -and
+                (-not $dev -or $c.NotAfter -gt $dev.NotAfter)) { $dev = $c }
+        }
+    } finally { $store.Close() }
     if ($dev) { return @("/s", "My", "/sha1", $dev.Thumbprint) }
     return $null
 }
