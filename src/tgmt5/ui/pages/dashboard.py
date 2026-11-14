@@ -6,8 +6,8 @@ from tgmt5.analytics.stats import compute
 from tgmt5.services.app import Snapshot
 from tgmt5.ui.pages.base import Page
 from tgmt5.ui.widgets import (
-    BarChart, Card, Donut, Dot, Kpi, LineChart, Meter, Pill, ResponsiveGrid, ResponsiveRow, hbox, label,
-    money, vbox,
+    BarChart, Card, Donut, Dot, Kpi, LineChart, Meter, Pill, ResponsiveGrid, ResponsiveRow, color, hbox,
+    label, money, vbox,
 )
 
 MODE_TEXT = {"MONITOR": "Monitor only", "PAPER": "Paper trading", "DEMO": "DEMO auto-execution",
@@ -60,7 +60,7 @@ class DashboardPage(Page):
         # ---- charts
         self.eq = LineChart("accent", empty_text="Equity history appears after the first minute "
                                                  "of a connected session")
-        self.dd = LineChart("loss", fmt=lambda v: f"{v:.1f}%")
+        self.dd = LineChart("loss", suffix="%", base_decimals=1)
         self.pnl = BarChart()
         self.donut = Donut()
         self.dist = BarChart(signed=False, tone="info")
@@ -111,7 +111,7 @@ class DashboardPage(Page):
         self.auto_sub.setText(s.blocking_reason or ("No lockouts · " +
                               ("execution confirmed for this account" if s.confirmed
                                else "first execution not yet confirmed")))
-        self.auto_sub.setStyleSheet("color: #F05252;" if s.blocking_reason else "")
+        self.auto_sub.setStyleSheet(f"color: {color('loss')};" if s.blocking_reason else "")
         self.k["Floating P&L"].set(money(s.floating_pnl, sign=True),
                                    tone="profit" if s.floating_pnl > 0 else "loss" if s.floating_pnl < 0 else None)
         self.k["Daily P&L"].set(money(s.daily_pnl, sign=True), "since start of day" if not sim else

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine, Sequence
 
 from PySide6.QtCore import (
@@ -12,7 +12,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QBoxLayout, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
-    QLabel, QLayout, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QLabel, QLayout, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from tgmt5.ui.theme import palette
@@ -55,6 +55,27 @@ def run_async(coro: Coroutine, ok: Callable[[Any], None] | None = None,
     return fut
 
 
+def local_dt(dt: datetime) -> datetime:
+    """Timestamps are stored in UTC and SQLite hands them back without a zone: show local time."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone()
+
+
+def fmt_dt(dt: datetime | None, fmt: str = "%d %b %H:%M") -> str:
+    return "—" if dt is None else local_dt(dt).strftime(fmt)
+
+
+def axis_decimals(lo: float, hi: float, ticks: int = 4, base: int = 0) -> int:
+    """Enough decimals that ``ticks`` evenly spaced labels between lo and hi are all different."""
+    step = abs(hi - lo) / max(1, ticks - 1)
+    d = base
+    # two values at least 2 units of the last digit apart can never round to the same label
+    while step > 0 and d < 6 and step < 2 * 10 ** -d:
+        d += 1
+    return d
+
+
 def money(v: float | None, ccy: str = "", sign: bool = False) -> str:
     if v is None:
         return "—"
@@ -89,6 +110,47 @@ class Card(QFrame):
         if layout is not None:
             self.lay.addLayout(layout, stretch)
         return self
+
+
+class NavButton(QPushButton):
+    """Sidebar entry: icon + name, with an optional count badge on the right (e.g. review queue)."""
+
+    def __init__(self, text: str, icon=None, shortcut: str = "") -> None:
+        super().__init__(f"  {text}")
+        self.setObjectName("Nav")
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        if icon is not None:
+            self.setIcon(icon)
+            self.setIconSize(QSize(18, 18))
+        if shortcut:
+            self.setToolTip(f"{text}  ({shortcut})")
+        self._badge, self._badge_tone = "", "warn"
+
+    def set_badge(self, text: str, tone: str = "warn") -> None:
+        if (text, tone) != (self._badge, self._badge_tone):
+            self._badge, self._badge_tone = text, tone
+            self.update()
+
+    def paintEvent(self, e) -> None:
+        super().paintEvent(e)
+        if not self._badge:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        f = QFont(self.font())
+        f.setPointSizeF(max(7.0, f.pointSizeF() * 0.82))
+        f.setBold(True)
+        p.setFont(f)
+        tw = p.fontMetrics().horizontalAdvance(self._badge)
+        bw, bh = max(20, tw + 12), 18
+        r = QRectF(self.width() - bw - 10, (self.height() - bh) / 2, bw, bh)
+        c = QColor(color(self._badge_tone))
+        p.setPen(Qt.NoPen)
+        p.setBrush(c)
+        p.drawRoundedRect(r, bh / 2, bh / 2)
+        p.setPen(QColor("#0A0E16") if self._badge_tone in ("warn", "profit") else QColor("white"))
+        p.drawText(r, Qt.AlignCenter, self._badge)
 
 
 class Pill(QLabel):
@@ -193,13 +255,16 @@ class Meter(QWidget):
 class LineChart(QWidget):
     """Anti-aliased line/area chart with gradient fill, axis labels and hover read-out."""
 
-    def __init__(self, tone: str = "accent", fmt: Callable[[float], str] = lambda v: f"{v:,.2f}",
-                 empty_text: str = "No data yet") -> None:
+    def __init__(self, tone: str = "accent", fmt: Callable[[float], str] | None = None,
+                 empty_text: str = "No data yet", suffix: str = "", base_decimals: int = 2) -> None:
         super().__init__()
         self.tone = tone
-        self.fmt = fmt
+        self.fmt = fmt              # fixed formatter; None = decimals chosen from the visible range
+        self.suffix = suffix
+        self.base_decimals = base_decimals
         self.empty_text = empty_text
         self.points: list[tuple[float, float]] = []
+        self.times: list[datetime | None] = []
         self.labels: tuple[str, str] = ("", "")
         self.baseline: float | None = None
         self.setMinimumHeight(180)
@@ -207,19 +272,37 @@ class LineChart(QWidget):
         self._hover: int | None = None
 
     def set_data(self, pts: Sequence[tuple[datetime | float, float]], baseline: float | None = None) -> None:
-        conv = []
+        conv, times = [], []
         for x, y in pts:
-            conv.append((x.timestamp() if isinstance(x, datetime) else float(x), float(y)))
-        self.points = conv
+            if isinstance(x, datetime):
+                x = local_dt(x)
+                times.append(x)
+                conv.append((x.timestamp(), float(y)))
+            else:
+                times.append(None)
+                conv.append((float(x), float(y)))
+        self.points, self.times = conv, times
         self.baseline = baseline
-        if pts and isinstance(pts[0][0], datetime):
-            self.labels = (pts[0][0].strftime("%d %b %H:%M"), pts[-1][0].strftime("%d %b %H:%M"))
+        if times and times[0] is not None:
+            same_day = times[0].date() == times[-1].date()
+            self.labels = (times[0].strftime("%d %b %H:%M"),
+                           times[-1].strftime("%H:%M" if same_day else "%d %b %H:%M"))
         self.update()
+
+    def _fmt(self, v: float, decimals: int) -> str:
+        if self.fmt:
+            return self.fmt(v)
+        if abs(v) < 0.5 * 10 ** -decimals:
+            v = 0.0                                     # never print "-0.00"
+        return f"{v:,.{decimals}f}{self.suffix}"
 
     def mouseMoveEvent(self, e) -> None:
         if len(self.points) > 1:
-            frac = (e.position().x() - 72) / max(1, self.width() - 84)
-            self._hover = max(0, min(len(self.points) - 1, round(frac * (len(self.points) - 1))))
+            left, right = 72, 12
+            xs = [x for x, _ in self.points]
+            x0, x1 = xs[0], (xs[-1] if xs[-1] != xs[0] else xs[0] + 1)
+            t = x0 + (e.position().x() - left) / max(1, self.width() - left - right) * (x1 - x0)
+            self._hover = min(range(len(xs)), key=lambda i: abs(xs[i] - t))   # nearest point in time
             self.update()
 
     def leaveEvent(self, _e) -> None:
@@ -255,13 +338,14 @@ class LineChart(QWidget):
             return QPointF(left + (xs[i] - x0) / (x1 - x0) * cw, top + (1 - (ys[i] - y0) / (y1 - y0)) * ch)
 
         grid = QColor(pal.border)
+        dec = axis_decimals(y0, y1, 4, 0 if (y1 - y0) >= 30 else self.base_decimals)
         for k in range(4):
             yy = top + ch * k / 3
             p.setPen(QPen(grid, 1, Qt.DashLine))
             p.drawLine(QPointF(left, yy), QPointF(w - right, yy))
             p.setPen(QColor(pal.muted))
             v = y1 - (y1 - y0) * k / 3
-            p.drawText(QRectF(0, yy - 8, left - 6, 16), Qt.AlignRight | Qt.AlignVCenter, self.fmt(v))
+            p.drawText(QRectF(0, yy - 8, left - 6, 16), Qt.AlignRight | Qt.AlignVCenter, self._fmt(v, dec))
         p.drawText(QRectF(left, h - 18, cw / 2, 16), Qt.AlignLeft, self.labels[0])
         p.drawText(QRectF(left + cw / 2, h - 18, cw / 2, 16), Qt.AlignRight, self.labels[1])
         if self.baseline is not None:
@@ -292,9 +376,14 @@ class LineChart(QWidget):
             p.setBrush(c)
             p.setPen(QPen(QColor(pal.surface), 2))
             p.drawEllipse(hp, 4.5, 4.5)
-            txt = self.fmt(ys[self._hover])
-            box = QRectF(min(hp.x() + 8, w - 100), max(top, hp.y() - 28), 90, 22)
-            p.setPen(Qt.NoPen)
+            txt = self._fmt(ys[self._hover], max(dec, self.base_decimals))
+            when = self.times[self._hover] if self._hover < len(self.times) else None
+            if when is not None:
+                txt = f"{txt}   {when.strftime('%d %b %H:%M')}"
+            bw = p.fontMetrics().horizontalAdvance(txt) + 18
+            bx = hp.x() + 10 if hp.x() + 10 + bw < w - 4 else hp.x() - 10 - bw
+            box = QRectF(bx, max(top, hp.y() - 30), bw, 22)
+            p.setPen(QPen(QColor(pal.border), 1))
             p.setBrush(QColor(pal.surface2))
             p.drawRoundedRect(box, 6, 6)
             p.setPen(QColor(pal.text))

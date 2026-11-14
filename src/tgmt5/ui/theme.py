@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+_ASSETS = Path(__file__).resolve().parent / "assets"
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,9 @@ def _rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
+_CHECK = (_ASSETS / "check.svg").as_posix()
+
+
 def stylesheet(p: Palette) -> str:
     return f"""
 * {{ font-family: {FONT_STACK}; font-size: 13px; color: {p.text}; }}
@@ -76,12 +82,20 @@ QPushButton[kind="primary"] {{ background: {p.accent}; border-color: {p.accent};
 QPushButton[kind="danger"] {{ background: {p.loss}; border-color: {p.loss}; color: white; }}
 QPushButton[kind="ghost"] {{ background: transparent; border-color: transparent; color: {p.muted}; }}
 QPushButton#Nav {{ background: transparent; border: none; border-radius: 10px; text-align: left;
-                   padding: 10px 14px; color: {p.muted}; font-weight: 600; }}
+                   padding: 9px 12px; color: {p.muted}; font-weight: 600; }}
 QPushButton#Nav:hover {{ background: {p.surface2}; color: {p.text}; }}
 QPushButton#Nav:checked {{ background: {p.accent_soft}; color: {p.text}; }}
+QFrame#SideFoot {{ background: {p.surface2}; border: 1px solid {p.border}; border-radius: 10px; }}
 QPushButton#Stop {{ background: {p.loss}; color: white; border: none; border-radius: 10px;
                     padding: 9px 18px; font-weight: 750; letter-spacing: 0.5px; }}
 QPushButton#Stop:hover {{ background: #ff3b3b; }}
+QPushButton#Stop:pressed {{ background: #c81e1e; }}
+QPushButton#Flatten {{ background: {_rgba(p.warn, 0.08)}; color: {p.warn}; border: 1px solid {_rgba(p.warn, 0.55)};
+                       border-radius: 10px; padding: 8px 14px; font-weight: 650; }}
+QPushButton#Flatten:hover {{ background: {_rgba(p.warn, 0.18)}; border-color: {p.warn}; }}
+QPushButton[kind="primary"]:hover {{ background: {_rgba(p.accent, 0.85)}; }}
+QPushButton[kind="danger"]:hover {{ background: {_rgba(p.loss, 0.85)}; }}
+QPushButton:pressed {{ padding-top: 8px; padding-bottom: 6px; }}
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {{
     background: {p.surface2}; border: 1px solid {p.border}; border-radius: 8px; padding: 6px 8px;
     selection-background-color: {p.accent}; }}
@@ -91,7 +105,15 @@ QComboBox QAbstractItemView {{ background: {p.surface}; border: 1px solid {p.bor
 QCheckBox {{ spacing: 8px; background: transparent; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 4px; border: 1px solid {p.border};
                         background: {p.surface2}; }}
-QCheckBox::indicator:checked {{ background: {p.accent}; border-color: {p.accent}; }}
+QCheckBox::indicator:checked {{ background: {p.accent}; border-color: {p.accent}; image: url("{_CHECK}"); }}
+QCheckBox::indicator:hover {{ border-color: {p.accent}; }}
+QCheckBox:disabled, QRadioButton:disabled {{ color: {p.muted}; }}
+QRadioButton {{ spacing: 8px; background: transparent; padding: 2px 0; }}
+QRadioButton::indicator {{ width: 14px; height: 14px; border-radius: 8px; border: 1px solid {p.border};
+                           background: {p.surface2}; }}
+QRadioButton::indicator:hover {{ border-color: {p.accent}; }}
+QRadioButton::indicator:checked {{ width: 6px; height: 6px; border: 5px solid {p.accent}; background: white; }}
+QRadioButton::indicator:disabled {{ background: {p.bg}; }}
 QSlider::groove:horizontal {{ height: 6px; background: {p.surface2}; border-radius: 3px; }}
 QSlider::sub-page:horizontal {{ background: {p.accent}; border-radius: 3px; }}
 QSlider::handle:horizontal {{ background: white; border: 2px solid {p.accent}; width: 14px;
@@ -125,3 +147,25 @@ QLineEdit[review="pending"] {{ border: 1px solid {p.loss}; background: {_rgba(p.
 QDialog {{ background: {p.surface}; }}
 QMessageBox {{ background: {p.surface}; }}
 """
+
+
+def apply_look(app, theme_name: str) -> Palette:
+    """Theme, font, number format and icon for the whole application (call once, before any window)."""
+    from PySide6.QtCore import QLocale
+    from PySide6.QtGui import QFont
+
+    from tgmt5.ui.icons import app_icon
+
+    # One number format everywhere: the UI is English and prices/lots are shown as 1,234.56, so
+    # spin boxes must not switch to "0,50" on a computer set to a comma-decimal region.
+    loc = QLocale(QLocale.English, QLocale.UnitedStates)
+    loc.setNumberOptions(QLocale.OmitGroupSeparator)
+    QLocale.setDefault(loc)
+    pal = set_theme(theme_name)
+    app.setStyleSheet(stylesheet(pal))
+    f = QFont()
+    f.setFamilies(["Segoe UI Variable Text", "Segoe UI", "Inter", "Helvetica Neue", "Arial"])
+    f.setPointSizeF(9.75)
+    app.setFont(f)
+    app.setWindowIcon(app_icon())
+    return pal

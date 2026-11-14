@@ -52,7 +52,7 @@ def main() -> None:
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "docs/screenshots")
     seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 60
     app = QApplication(sys.argv)
-    app.setStyleSheet(theme.stylesheet(theme.set_theme("dark")))
+    theme.apply_look(app, os.environ.get("TGMT5_THEME", "dark"))
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
     with loop:

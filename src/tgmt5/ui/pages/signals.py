@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from datetime import timezone
 
 from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QLineEdit, QPushButton, QWidget
 from sqlalchemy import select
@@ -10,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from tgmt5.persistence.models import SignalRow
 from tgmt5.services.app import Snapshot
 from tgmt5.ui.pages.base import Page
-from tgmt5.ui.widgets import Card, Pill, Timeline, Toast, hbox, label, run_async, vbox
+from tgmt5.ui.widgets import Card, Pill, Timeline, Toast, color, fmt_dt, hbox, label, run_async, vbox
 
 FILTERS = ["All", "Manual review", "Active", "Executed", "Rejected / failed", "Monitored", "Simulated"]
 FILTER_STATUSES = {
@@ -32,9 +31,8 @@ class SignalCard(Card):
         super().__init__(None, padding=16, shadow=False)
         m = sig.message
         src = m.source_title or str(sig.source_id)
-        ts = m.date.replace(tzinfo=timezone.utc) if m.date.tzinfo is None else m.date
         head = hbox(label(f"#{sig.id}", "h2"), label(src, "muted"),
-                    label(ts.astimezone().strftime("%d %b %H:%M:%S"), "muted"), "stretch")
+                    label(fmt_dt(m.date, "%d %b %H:%M:%S"), "muted"), "stretch")
         if sig.is_simulated:
             head.addWidget(Pill("PAPER", "paper"))
         head.addWidget(Pill(sig.status))
@@ -61,7 +59,7 @@ class SignalCard(Card):
             ]
             info.addWidget(label("DIRECTION", "caption"), 0, 0)
             d = label(sig.direction, "h2")
-            d.setStyleSheet(f"color: {'#22C55E' if tone == 'profit' else '#F05252'};")
+            d.setStyleSheet(f"color: {color(tone)};")
             info.addWidget(d, 1, 0)
             for i, (k, v) in enumerate(fields, start=1):
                 info.addWidget(label(k, "caption"), 0, i)
@@ -85,7 +83,7 @@ class SignalCard(Card):
         self.add(tl)
         if sig.reject_reason:
             r = label(f"Reason: {sig.reject_reason}", wrap=True)
-            r.setStyleSheet("color: #F5A524;" if sig.status == "MANUAL_REVIEW" else "color: #F05252;")
+            r.setStyleSheet(f"color: {color('warn' if sig.status == 'MANUAL_REVIEW' else 'loss')};")
             self.add(r)
         tickets = [str(e.position_ticket or e.order_ticket) for e in sig.executions
                    if e.position_ticket or e.order_ticket]

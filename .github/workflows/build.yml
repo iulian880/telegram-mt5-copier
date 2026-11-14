@@ -1,0 +1,90 @@
+# Builds the Windows executables on every push and pull request:
+#   TGMT5-Portable-<version>.exe  one self-contained file, no installation
+#   TGMT5-Setup-<version>.exe     Inno Setup installer
+# Both are started once in --sandbox mode to prove the frozen app really boots.
+# On main, they are published to the GitHub Release v<version> (created if it does not exist).
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen   # for the GUI smoke test inside pytest only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - name: Tools (Inno Setup, test signing certificate)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          python -m venv .venv
+          & packaging\new_dev_cert.ps1
+      - name: Test + build one-folder app
+        shell: pwsh
+        run: packaging\build_windows.ps1
+      - name: Build portable exe
+        shell: pwsh
+        run: packaging\build_portable.ps1
+      - name: Build installer
+        shell: pwsh
+        run: packaging\build_installer.ps1
+      - name: Smoke test (portable exe starts and runs the sandbox)
+        shell: pwsh
+        run: |
+          $exe = "TGMT5-Portable-${{ steps.ver.outputs.version }}.exe"
+          $data = Join-Path $env:RUNNER_TEMP "tgmt5-smoke"
+          Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath ".\$exe" -ArgumentList "--sandbox", "--data-dir", "`"$data`"" -PassThru
+          Start-Sleep -Seconds 40
+          $log = Join-Path $data "logs\tgmt5.jsonl"
+          if ($p.HasExited) { Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "App exited early (code $($p.ExitCode))" }
+          Stop-Process -Id $p.Id -Force
+          if (-not (Test-Path $log)) { throw "No log written at $log" }
+          $text = Get-Content $log -Raw
+          if ($text -notmatch "Application started") { Get-Content $log | Select-Object -Last 40; throw "App did not finish starting" }
+          if ($text -match '"level": "(ERROR|CRITICAL)"') { Get-Content $log | Select-String '"(ERROR|CRITICAL)"' | Select-Object -First 20; throw "Errors logged during the smoke test" }
+          Write-Host "Smoke test passed:"; Get-Content $log | Select-Object -Last 8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TGMT5-${{ steps.ver.outputs.version }}-windows
+          path: |
+            TGMT5-Portable-*.exe
+            TGMT5-Setup-*.exe
+          if-no-files-found: error
+      - name: Publish GitHub Release v${{ steps.ver.outputs.version }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $files = @("TGMT5-Portable-$v.exe", "TGMT5-Setup-$v.exe")
+          gh release view "v$v" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "v$v" @files --clobber
+          } else {
+            $notes = "docs/release-notes/v$v.md"
+            if (Test-Path $notes) { gh release create "v$v" @files --target $env:GITHUB_SHA --title "TGMT5 $v" --notes-file $notes --latest }
+            else { gh release create "v$v" @files --target $env:GITHUB_SHA --title "TGMT5 $v" --generate-notes --latest }
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release failed" }

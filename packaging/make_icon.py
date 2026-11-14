@@ -52,7 +52,8 @@ def draw() -> Image.Image:
 
 def main() -> None:
     img = draw()
-    img.save(HERE / "tgmt5.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])    print("Wrote", HERE / "tgmt5.ico")
+    img.save(HERE / "tgmt5.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    print("Wrote", HERE / "tgmt5.ico")
 
 
 if __name__ == "__main__":

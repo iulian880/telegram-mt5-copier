@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from tgmt5.services.app import Snapshot
 from tgmt5.ui.pages.base import Page
 from tgmt5.ui.theme import palette
-from tgmt5.ui.widgets import Card, hbox
+from tgmt5.ui.widgets import Card, fmt_dt, hbox
 
 LEVELS = ["All", "CRITICAL", "ERROR", "WARNING", "INFO"]
 
@@ -64,7 +64,7 @@ class LogPage(Page):
         tones = {"CRITICAL": pal.loss, "ERROR": pal.loss, "WARNING": pal.warn, "INFO": pal.muted}
         self.table.setRowCount(len(rows))
         for r, e in enumerate(rows):
-            ts = e.ts.astimezone().strftime("%d %b %H:%M:%S") if e.ts.tzinfo else e.ts.strftime("%d %b %H:%M:%S")
+            ts = fmt_dt(e.ts, "%d %b %H:%M:%S")
             items = [QTableWidgetItem(ts), QTableWidgetItem(e.level), QTableWidgetItem(e.category),
                      QTableWidgetItem(e.message)]
             items[1].setForeground(QColor(tones.get(e.level, pal.text)))
