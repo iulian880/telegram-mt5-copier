@@ -59,6 +59,7 @@ class SourcesPage(Page):
         self.diag = label("", "muted", wrap=True)
         diag.add(layout=hbox(self.dot, self.diag_title, "stretch"))
         diag.add(self.diag)
+        diag.lay.addStretch(1)          # keep the status at the top, the button at the bottom
         reconnect = QPushButton("Restart listener")
         reconnect.clicked.connect(lambda: run_async(self.svc.start_telegram(),
                                                     lambda ok: Toast.show_message(

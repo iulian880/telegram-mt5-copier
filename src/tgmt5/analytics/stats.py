@@ -83,6 +83,11 @@ def _bucket(reason: str) -> str:
     return "Other"
 
 
+def _utc(dt: datetime | None) -> datetime | None:
+    """SQLite returns stored UTC timestamps without a zone; make them aware so they compare safely."""
+    return dt.replace(tzinfo=timezone.utc) if dt is not None and dt.tzinfo is None else dt
+
+
 def outcomes(db: Database, simulated: bool) -> list[TradeOutcome]:
     with db.session() as s:
         sigs = list(s.scalars(select(SignalRow).where(
@@ -91,8 +96,8 @@ def outcomes(db: Database, simulated: bool) -> list[TradeOutcome]:
         for sig in sigs:
             legs = [l for l in sig.executions if l.state == LegState.CLOSED.value]
             net = sum((l.profit or 0) + (l.commission or 0) for l in legs)
-            opened = min((l.opened_at for l in legs if l.opened_at), default=None)
-            closed = max((l.closed_at for l in legs if l.closed_at), default=None)
+            opened = _utc(min((l.opened_at for l in legs if l.opened_at), default=None))
+            closed = _utc(max((l.closed_at for l in legs if l.closed_at), default=None))
             out.append(TradeOutcome(sig.id, sig.source_id, sig.symbol or "?", sig.direction or "",
                                     opened, closed, round(net, 2), sig.risk_money))
         return sorted(out, key=lambda o: o.closed or datetime.min.replace(tzinfo=timezone.utc))
@@ -123,7 +128,7 @@ def compute(db: Database, simulated: bool) -> Stats:
         mdd = max(mdd, peak - cum)
         if o.closed:
             st.cumulative.append((o.closed, round(cum, 2)))
-            daily[o.closed.date().isoformat()] += o.net
+            daily[o.closed.astimezone().date().isoformat()] += o.net     # the user's local day
     st.max_drawdown = round(mdd, 2)
     st.daily_pnl = sorted((k, round(v, 2)) for k, v in daily.items())
 

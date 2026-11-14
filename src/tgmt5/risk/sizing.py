@@ -200,12 +200,15 @@ def tp_layout(strategy: TpStrategy, n_tps: int, hedging: bool) -> tuple[TpStrate
 
 def plan_volumes(r: RiskSettings, *, positions: int, tps_covered: int, allocation: list[float],
                  spec: SymbolSpec, loss_fn: Callable[[float], float], equity: float, balance: float,
-                 multiplier: float = 1.0, max_total: float | None = None) -> SizingPlan:
+                 multiplier: float = 1.0, max_total: float | None = None,
+                 max_leg: float | None = None) -> SizingPlan:
     """Decide the volume of every position of a signal.
 
     ``positions``: how many positions the TP strategy wants (one per TP when splitting).
     ``tps_covered``: how many TPs one position stands for (a managed single position covers all).
     ``loss_fn(volume)``: loss at the SL for that total volume (broker calculation in the engine).
+    ``max_total``: cap for the whole signal; ``max_leg``: cap for each single position (the risk
+    engine rejects any order above "max lot per position", so legs are sized to stay under it).
     This is the only place sizing decisions are made; the engine and the Risk page preview
     both call it, so the preview shows exactly what the engine would do.
     """
@@ -213,6 +216,11 @@ def plan_volumes(r: RiskSettings, *, positions: int, tps_covered: int, allocatio
     step, vmin = spec.volume_step, spec.volume_min
     policy = r.small_volume_policy
     weights = (list(allocation) + [allocation[-1]] * positions)[:positions]
+    if max_leg is not None and max_leg > 0:
+        # largest share of the total that one leg gets -> total that keeps every leg under max_leg
+        biggest = max(weights) / (sum(weights) or 1) if positions > 1 else 1.0
+        cap = max_leg / max(biggest, _EPS)
+        max_total = cap if max_total is None else min(max_total, cap)
     try:
         if r.sizing_mode in PER_TP_MODES:
             want = lot_per_tp_for(r, balance) * multiplier
@@ -242,6 +250,13 @@ def plan_volumes(r: RiskSettings, *, positions: int, tps_covered: int, allocatio
             vols = _fit(total, weights, spec, policy, plan)
             if plan.error:
                 return plan
+        if max_leg is not None and max_leg > 0 and any(v > max_leg + _EPS for v in vols):
+            capped = [floor_to_step(min(v, max_leg), step) for v in vols]
+            if any(v < vmin - _EPS for v in capped):
+                plan.error = f"max lot per position {max_leg:g} is below the broker minimum {vmin:g}"
+                return plan
+            plan.notes.append(f"volume capped at {max_leg:g} lot per position")
+            vols = capped
         plan.volumes = vols
         plan.risk_money = round(loss_fn(plan.total), 2)
     except SizingError as e:

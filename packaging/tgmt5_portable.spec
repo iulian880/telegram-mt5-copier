@@ -13,6 +13,7 @@ a = Analysis(
     pathex=[str(root / "src")],
     datas=[
         (str(src / "persistence" / "migrations"), "tgmt5/persistence/migrations"),
+        (str(src / "ui" / "assets"), "tgmt5/ui/assets"),
     ],
     hiddenimports=(collect_submodules("tgmt5") + collect_submodules("alembic")
                    + ["MetaTrader5", "keyring.backends.Windows", "qasync"]),

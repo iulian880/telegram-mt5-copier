@@ -150,6 +150,7 @@ class ConnectionPage(Page):
             self.group.addButton(r, i)
             ex.add(r)
         self.r_mon.setChecked(True)
+        self._mode_seen: str | None = None      # last backend mode the radio buttons were synced to
         apply = QPushButton("Apply mode")
         apply.setProperty("kind", "primary")
         apply.clicked.connect(self._apply_mode)
@@ -275,7 +276,12 @@ class ConnectionPage(Page):
 
     def _apply_mode(self) -> None:
         mode = MODES[self.group.checkedId()]
-        acct = self.svc.real_gw.account_info() if self.svc.real_gw else None
+        real_gw = self.svc.real_gw
+        # read the account on the MT5 worker thread, then continue on the GUI thread
+        run_async(self.svc.run_mt5(lambda: real_gw.account_info() if real_gw else None),
+                  lambda acct: self._apply_mode_for(mode, acct))
+
+    def _apply_mode_for(self, mode: ExecutionMode, acct) -> None:
         if mode in (ExecutionMode.DEMO, ExecutionMode.LIVE) and acct is None:
             Toast.show_error("Connect and verify the account first")
             return
@@ -287,7 +293,7 @@ class ConnectionPage(Page):
             async def confirm_demo():
                 await self.svc.confirm_automated_execution()
                 await self.svc.set_mode(mode)
-            run_async(confirm_demo(), lambda _: Toast.show_message("DEMO auto-execution enabled", "profit"))
+            run_async(confirm_demo(), lambda _: self._mode_applied("DEMO auto-execution enabled", "profit"))
             return
         if mode is ExecutionMode.LIVE and self.svc.risk.state.confirmed_real_account != key:
             if acct.is_demo:
@@ -301,11 +307,15 @@ class ConnectionPage(Page):
             async def confirm_real():
                 await self.svc.confirm_real_account(typed)
                 await self.svc.set_mode(mode)
-            run_async(confirm_real(), lambda _: Toast.show_message("REAL ACCOUNT auto-execution enabled", "warn"))
+            run_async(confirm_real(), lambda _: self._mode_applied("REAL ACCOUNT auto-execution enabled", "warn"))
             return
-        run_async(self.svc.set_mode(mode), lambda _: Toast.show_message(
+        run_async(self.svc.set_mode(mode), lambda _: self._mode_applied(
             "REAL ACCOUNT auto-execution enabled" if mode is ExecutionMode.LIVE else f"Mode: {mode.value}",
             "warn" if mode is ExecutionMode.LIVE else "info"))
+
+    def _mode_applied(self, text: str, tone: str) -> None:
+        self._mode_seen = None          # re-sync the radio buttons with the mode the backend now runs
+        Toast.show_message(text, tone)
 
     def _save(self) -> None:
         cfg = self._mt5_config()
@@ -341,7 +351,12 @@ class ConnectionPage(Page):
         if self.allow_real.isChecked() != allowed:
             self.allow_real.setChecked(allowed)
         self.r_live.setEnabled(allowed and not s.sandbox)
-        a = self.svc.real_gw.account_info() if (self.svc.real_gw and s.mt5_connected) else None
+        if s.mode != self._mode_seen:
+            # follow mode changes made elsewhere (emergency stop, start-up, lockouts); a choice the
+            # user clicked but has not applied yet is kept until the backend mode changes
+            self._mode_seen = s.mode
+            {"MONITOR": self.r_mon, "PAPER": self.r_pap, "DEMO": self.r_demo, "LIVE": self.r_live}[s.mode].setChecked(True)
+        a = s.real_account if s.mt5_connected else None
         if a:
             real = not a.is_demo
             self.v_dot.set_tone("loss" if real else "profit")
@@ -368,12 +383,11 @@ class ConnectionPage(Page):
                  "DEMO": "Currently executing on the DEMO account.",
                  "LIVE": "Currently executing on the REAL-money account."}
         self.mode_note.setText(notes[s.mode] + (f"  ⚠ {s.blocking_reason}" if s.blocking_reason else ""))
-        ti = self.svc.real_gw.terminal_info() if (self.svc.real_gw and s.mt5_connected) else None
         rec = self.svc.last_recovery.summary() if self.svc.last_recovery else "no recovery run yet"
         tg = s.telegram
         self.h_lines.setText(
             f"MT5 terminal: {'connected' if s.mt5_connected else 'disconnected'}"
-            + (f", algo trading {'ON' if ti.trade_allowed else 'OFF'}" if ti else "") + "\n"
+            + (f", algo trading {'ON' if s.algo_trading else 'OFF'}" if s.algo_trading is not None else "") + "\n"
             f"Telegram: {'connected' if tg['connected'] else 'disconnected'}, "
             f"{'authorised' if tg['authorized'] else 'not authorised'}\n"
             f"Signal queue: {s.queue_depth} waiting\n"

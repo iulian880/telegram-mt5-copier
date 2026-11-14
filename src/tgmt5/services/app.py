@@ -84,6 +84,11 @@ class Snapshot:
     open_risk: float = 0.0
     open_risk_cap: float = 0.0
     queue_depth: int = 0
+    # the REAL terminal's account / algo-trading switch (``account`` is the paper account in PAPER
+    # mode). Read here, on the MT5 worker thread: the MetaTrader5 package is not thread-safe, so
+    # the GUI must never call the gateway itself.
+    real_account: AccountInfo | None = None
+    algo_trading: bool | None = None
 
 
 class AppService:
@@ -327,6 +332,7 @@ class AppService:
                 guard.disconnect()
                 raise GatewayError(f"account currency {acct.currency} != expected {cfg.expected_currency}")
             self.real_gw = guard
+            self.paper_gw = None        # the paper simulator must use the NEW terminal adapter
             self._connect_params = params
             self._fail_count = 0
             self.risk.mt5_unstable = False
@@ -390,6 +396,7 @@ class AppService:
             if self.real_gw:
                 self.real_gw.disconnect()
             self.real_gw = None
+            self.paper_gw = None        # it wraps the adapter that was just disconnected
             self.engine.set_gateway(None)
         await self.run_mt5(_do)
 
@@ -566,6 +573,10 @@ class AppService:
                 if not approve or sig.kind != MessageKind.NEW_SIGNAL.value or sig.stop_loss is None:
                     self.engine._transition(s, sig, SignalStatus.CANCELLED, "dismissed by user")
                     return SignalStatus.CANCELLED
+                if sig.is_simulated and not self.engine.simulated:
+                    raise ValueError("This signal arrived during PAPER trading: switch to Paper trading "
+                                     "to approve it, or dismiss it.")
+                sig.is_simulated = self.engine.simulated     # it is executed in the CURRENT mode
             return self.engine.process_signal(signal_id, None, from_waiting=False)
         return await self.run_mt5(_do)
 
@@ -637,6 +648,10 @@ class AppService:
             confirmed=bool(acct and (self.risk.state.confirmed_real_account if not acct.is_demo else
                                      self.risk.state.confirmed_account) == f"{acct.login}@{acct.server}"),
             queue_depth=self.queue.qsize())
+        if connected:
+            snap.real_account = acct if gw is self.real_gw else self.real_gw.account_info()
+            ti = self.real_gw.terminal_info()
+            snap.algo_trading = bool(ti.trade_allowed) if ti else None
         start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         sim = self.engine.simulated
         with self.db.session() as s:

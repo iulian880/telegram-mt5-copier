@@ -10,8 +10,11 @@ if ($LASTEXITCODE -ne 0) { throw "Python 3.12 or newer is required (.venv has $(
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
+if ($LASTEXITCODE -ne 0) { throw "pip install failed ($LASTEXITCODE)" }
 pytest -q
+if ($LASTEXITCODE -ne 0) { throw "Tests failed ($LASTEXITCODE): not building." }
 pyinstaller packaging\tgmt5.spec --noconfirm
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed ($LASTEXITCODE)" }
 & "$PSScriptRoot\sign.ps1" -Check
 if ($LASTEXITCODE -eq 0) { & "$PSScriptRoot\sign.ps1" dist\TGMT5\TGMT5.exe }
 else { Write-Warning "No signing certificate: TGMT5.exe left unsigned (see packaging\sign.ps1)." }

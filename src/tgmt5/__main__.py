@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(args.data_dir / "logs")
 
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QFont, QGuiApplication
+    from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication
     import qasync
 
@@ -87,12 +87,7 @@ def main(argv: list[str] | None = None) -> int:
 
     svc = build_service(args.data_dir, args.sandbox)
     from tgmt5.ui import theme
-    pal = theme.set_theme(svc.config.theme)
-    app.setStyleSheet(theme.stylesheet(pal))
-    f = QFont()
-    f.setFamilies(["Segoe UI Variable Text", "Segoe UI", "Inter", "Helvetica Neue", "Arial"])
-    f.setPointSizeF(9.75)
-    app.setFont(f)
+    theme.apply_look(app, svc.config.theme)
 
     from tgmt5.ui.main_window import MainWindow
     win = MainWindow(svc)

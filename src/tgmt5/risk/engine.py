@@ -36,6 +36,7 @@ class RiskState:
     confirmed_account: str = ""            # "login@server" the user confirmed for automated DEMO exec
     confirmed_real_account: str = ""       # "login@server" confirmed (typed) for REAL ACCOUNT exec
     trade_times: list[float] = field(default_factory=list)
+    account: str = ""                      # "login@server" the equity baselines above belong to
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,18 @@ class RiskEngine:
         cfg = self.settings
         today = self._clock().date().isoformat()
         changed = False
+        key = f"{acct.login}@{acct.server}"
+        if s.account != key:
+            if s.account:
+                # another account (e.g. a new demo after the old one expired): its equity has
+                # nothing to do with the previous account's peak or day start
+                log.warning("risk baselines reset: account changed %s -> %s", s.account, key)
+                s.equity_peak = acct.equity
+                s.day, s.day_start_equity = today, acct.equity
+                s.daily_lockout_day = s.daily_lockout_reason = ""
+                s.drawdown_lockout, s.drawdown_reason = False, ""
+            s.account = key
+            changed = True
         if s.day != today:
             s.day = today
             s.day_start_equity = acct.equity

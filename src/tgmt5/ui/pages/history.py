@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFrame, QHeaderView, QPushButton, QTableWidget, QTableWidgetItem,
 )
@@ -9,8 +10,9 @@ from PySide6.QtWidgets import (
 from tgmt5.analytics.stats import compute, export_csv, outcomes
 from tgmt5.services.app import Snapshot
 from tgmt5.ui.pages.base import Page
+from tgmt5.ui.theme import palette
 from tgmt5.ui.widgets import (
-    BarChart, Card, Kpi, LineChart, ResponsiveGrid, ResponsiveRow, Toast, hbox, label, money, vbox,
+    BarChart, Card, Kpi, LineChart, ResponsiveGrid, ResponsiveRow, Toast, fmt_dt, hbox, label, money, vbox,
 )
 
 
@@ -81,21 +83,21 @@ class HistoryPage(Page):
 
     def reload(self) -> None:
         sim = self.simulated
+        tone = QColor(palette().paper if sim else palette().profit)
+        rgb = f"{tone.red()},{tone.green()},{tone.blue()}"
+        self.banner.setStyleSheet(f"QFrame#Banner {{ background: rgba({rgb},0.11);"
+                                  f" border: 1px solid rgba({rgb},0.5); }}")
         if sim:
-            self.banner.setStyleSheet("QFrame#Banner { background: rgba(167,139,250,0.12);"
-                                      " border: 1px solid rgba(167,139,250,0.5); }")
             self.banner_text.setText("SIMULATED RESULTS - fills are modelled with simplified spread, "
                                      "slippage and commission. They are not evidence of realistic or "
                                      "profitable execution.")
         else:
-            self.banner.setStyleSheet("QFrame#Banner { background: rgba(34,197,94,0.10);"
-                                      " border: 1px solid rgba(34,197,94,0.45); }")
             self.banner_text.setText("DEMO ACCOUNT RESULTS - executed by the broker on a demo account. "
                                      "Demo fills can differ from live market conditions.")
         st = compute(self.svc.db, simulated=sim)
         k = self.k
         k["Total trades"].set(str(st.trades), f"{st.wins} wins / {st.losses} losses")
-        k["Win rate"].set(f"{st.win_rate:.1f}%")
+        k["Win rate"].set(f"{st.win_rate:.1f}%" if st.trades else "—")
         k["Profit factor"].set(f"{st.profit_factor:.2f}" if st.profit_factor else "—")
         k["Expectancy"].set(money(st.expectancy, sign=True), "per signal")
         k["Average win"].set(money(st.avg_win), tone="profit" if st.avg_win else None)
@@ -103,8 +105,9 @@ class HistoryPage(Page):
         k["Net P&L"].set(money(st.net, sign=True), tone="profit" if st.net > 0 else "loss" if st.net < 0 else None)
         k["Max drawdown"].set(money(st.max_drawdown), "closed-trade basis")
         k["Average R"].set(f"{st.avg_r:+.2f}R" if st.avg_r is not None else "—")
-        k["Exec latency"].set(f"{st.exec_latency_ms.get('avg', 0):.0f} ms" if st.exec_latency_ms else "—",
-                              f"p95 {st.exec_latency_ms.get('p95', 0):.0f} ms" if st.exec_latency_ms else "")
+        lat = st.exec_latency_ms if st.exec_latency_ms.get("n") else {}
+        k["Exec latency"].set(f"{lat.get('avg', 0):.0f} ms" if lat else "—",
+                              f"p95 {lat.get('p95', 0):.0f} ms" if lat else "")
         k["Avg slippage"].set(f"{st.slippage_points.get('avg', 0):.1f} pts" if st.slippage_points else "—")
         k["Avg spread"].set(f"{st.spread_points.get('avg', 0):.0f} pts" if st.spread_points else "—")
         self.cum.set_data(st.cumulative, baseline=0)
@@ -124,8 +127,7 @@ class HistoryPage(Page):
             f"Signal outcomes: " + ", ".join(f"{k} {v}" for k, v in sorted(st.status_counts.items())))
         outs = list(reversed(outcomes(self.svc.db, sim)))[:200]
         _fill(self.trades, [[f"#{o.signal_id}", o.symbol, o.direction,
-                             o.opened.strftime("%d %b %H:%M") if o.opened else "—",
-                             o.closed.strftime("%d %b %H:%M") if o.closed else "—", f"{o.net:+,.2f}",
+                             fmt_dt(o.opened), fmt_dt(o.closed), f"{o.net:+,.2f}",
                              f"{o.r_multiple:+.2f}" if o.r_multiple is not None else "—"] for o in outs])
 
     def _export(self) -> None:

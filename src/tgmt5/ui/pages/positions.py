@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from tgmt5.services.app import Snapshot
 from tgmt5.ui.pages.base import Page
 from tgmt5.ui.theme import palette
-from tgmt5.ui.widgets import Card, Toast, hbox, label, run_async
+from tgmt5.ui.widgets import Card, Toast, color, hbox, label, money, run_async
 
 COLS = ["Ticket", "Symbol", "Side", "Lots", "Entry", "Price", "SL", "TP", "P&L", "Risk", "Duration",
         "Signal"]
@@ -45,30 +45,42 @@ class PositionsPage(Page):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setMinimumHeight(320)
+        self.table.setMinimumHeight(260)
+        self.table.doubleClicked.connect(lambda _i: self._modify())
+        self.table.setToolTip("Double-click a position to change its SL/TP")
         self.modify_btn = QPushButton("Modify SL/TP…")
         self.close_btn = QPushButton("Close position…")
         self.close_btn.setProperty("kind", "danger")
         self.modify_btn.clicked.connect(self._modify)
         self.close_btn.clicked.connect(self._close)
         c = Card("Open positions")
+        self.summary = label("", "muted")
+        c.header.insertWidget(1, self.summary)
+        c.header.insertSpacing(1, 14)
         c.header.addWidget(self.modify_btn)
         c.header.addWidget(self.close_btn)
         self.conn_note = label("", wrap=True)
-        self.conn_note.setStyleSheet("color: #F5A524; font-weight: 600;")
+        self.conn_note.setStyleSheet(f"color: {color('warn')}; font-weight: 600;")
         self.conn_note.setVisible(False)
         c.add(self.conn_note)
-        c.add(self.table)
-        self.body.addWidget(c)
+        c.add(self.table, stretch=1)
+        self.empty = label("No open positions. Executed signals appear here with live P&L.", "muted")
+        self.empty.setAlignment(Qt.AlignCenter)
+        c.add(self.empty)
+        self.body.addWidget(c, 3)
         self.orders = QTableWidget(0, 7)
         self.orders.setHorizontalHeaderLabels(["Ticket", "Symbol", "Type", "Lots", "Price", "SL / TP",
                                                "Signal"])
         self.orders.verticalHeader().setVisible(False)
         self.orders.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.orders.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.orders.setMinimumHeight(160)
-        self.body.addWidget(Card("Pending orders").add(self.orders))
-        self.body.addStretch()
+        self.orders.setMinimumHeight(140)
+        self.orders.setAlternatingRowColors(True)
+        oc = Card("Pending orders")
+        self.orders_summary = label("", "muted")
+        oc.header.insertWidget(1, self.orders_summary)
+        oc.header.insertSpacing(1, 14)
+        self.body.addWidget(oc.add(self.orders, stretch=1), 1)
         self._rows: list[dict] = []
 
     def refresh(self, s: Snapshot) -> None:
@@ -77,7 +89,18 @@ class PositionsPage(Page):
         self.conn_note.setText("⚠ Not connected to MT5: open positions cannot be shown. They are still at the "
                                "broker with their SL/TP. Connect in Connection → Connect & verify.")
         sel = self._selected()
+        sel_ticket = self._rows[sel]["ticket"] if sel is not None and sel < len(self._rows) else None
         self._rows = s.positions
+        self.empty.setVisible(not s.positions and s.mt5_connected)
+        if s.positions:
+            lots = sum(p["volume"] for p in s.positions)
+            pnl = sum(p["profit"] for p in s.positions)
+            risk = sum(p["risk"] for p in s.positions)
+            self.summary.setText(f"{len(s.positions)} open · {lots:g} lots · P&L "
+                                 f"<span style='color:{pal.profit if pnl >= 0 else pal.loss}'>"
+                                 f"{money(pnl, sign=True)}</span> · risk {money(risk)}")
+        else:
+            self.summary.setText("")
         self.table.setRowCount(len(s.positions))
         now = time.time()
         for r, p in enumerate(s.positions):
@@ -94,13 +117,21 @@ class PositionsPage(Page):
             ]
             for c, it in enumerate(vals):
                 self.table.setItem(r, c, it)
-        if sel is not None and sel < len(s.positions):
-            self.table.selectRow(sel)
+        # keep the selection on the same TICKET (not row number): when a position above it closes,
+        # the rows shift and a row-based selection would silently point at another position
+        self.table.clearSelection()
+        for row, p in enumerate(s.positions):
+            if p["ticket"] == sel_ticket:
+                self.table.selectRow(row)
+                break
         self.orders.setRowCount(len(s.orders))
         names = {2: "BUY LIMIT", 3: "SELL LIMIT", 4: "BUY STOP", 5: "SELL STOP"}
+        self.orders_summary.setText(f"{len(s.orders)} waiting" if s.orders else "")
         for r, o in enumerate(s.orders):
-            for c, v in enumerate([o["ticket"], o["symbol"], names.get(o["type"], o["type"]), o["volume"],
-                                   o["price"], f"{o['sl']:g} / {o['tp']:g}",
+            sltp = f"{o['sl']:g}" if o["sl"] else "—"
+            sltp += f" / {o['tp']:g}" if o["tp"] else " / —"
+            for c, v in enumerate([o["ticket"], o["symbol"], names.get(o["type"], o["type"]), f"{o['volume']:g}",
+                                   f"{o['price']:g}", sltp,
                                    f"#{o['signal_id']}" if o["signal_id"] else "unlinked"]):
                 self.orders.setItem(r, c, _item(str(v), align=Qt.AlignLeft | Qt.AlignVCenter))
 
