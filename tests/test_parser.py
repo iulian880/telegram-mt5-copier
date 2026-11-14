@@ -159,3 +159,54 @@ def test_management_multiple_symbols_is_ambiguous():
 
 def test_very_long_message_ignored():
     assert P.parse("BUY XAUUSD " * 1000).kind is MessageKind.NOISE
+
+
+# ---- regression: everyday chat must never become a trade command (v0.4.0) -------------
+@pytest.mark.parametrize("text", [
+    "Gold is getting close to TP1 2670 🔥",
+    "Don't close yet, hold",
+    "Do not close your trades, we are fine",
+    "We are close to entry, be ready",
+    "Keep your SL, be patient guys",
+    "Stop worrying, it will be fine. Entry was perfect",
+    "Take only 1% risk on this one",
+    "Never risk more than 2% of your balance, take 1% max",
+    "Market close in 1 hour",
+    "Please do not delete this channel",
+    "Remove your emotions from trading",
+    "Price is near break even zone, watching",
+    "This trade is not risk free yet",
+])
+def test_chat_is_not_management(text):
+    r = P.parse(text)
+    assert r.management is None or r.kind is MessageKind.INFO, (text, r)
+    assert r.kind is not MessageKind.MANAGEMENT, (text, r)
+
+
+@pytest.mark.parametrize("text,t,extra", [
+    ("Close all", ManagementType.CLOSE_ALL, {}),
+    ("CLOSE NOW", ManagementType.CLOSE_ALL, {}),
+    ("Exit gold now", ManagementType.CLOSE_ALL, {"symbol": "XAUUSD"}),
+    ("Close it", ManagementType.CLOSE_ALL, {}),
+    ("Close EURUSD", ManagementType.CLOSE_ALL, {"symbol": "EURUSD"}),
+    ("Please close the trade", ManagementType.CLOSE_ALL, {}),
+    ("Secure 30% profits", ManagementType.CLOSE_PARTIAL, {"fraction": 0.3}),
+    ("Take 50% off the table", ManagementType.CLOSE_PARTIAL, {"fraction": 0.5}),
+    ("Book partial profits 25%", ManagementType.CLOSE_PARTIAL, {"fraction": 0.25}),
+    ("SL @ BE", ManagementType.MOVE_SL_BE, {}),
+    ("Move to breakeven", ManagementType.MOVE_SL_BE, {}),
+    ("Make it risk free", ManagementType.MOVE_SL_BE, {}),
+    ("EURUSD buy limit cancelled", ManagementType.CANCEL_PENDING, {"symbol": "EURUSD"}),
+    ("Remove the pending order", ManagementType.CANCEL_PENDING, {}),
+])
+def test_explicit_commands_still_work(text, t, extra):
+    r = P.parse(text)
+    assert r.kind is MessageKind.MANAGEMENT and r.management.type is t, (text, r)
+    for k, v in extra.items():
+        assert getattr(r.management, k) == v
+
+
+@pytest.mark.parametrize("text", ["Close at 2665 if it fails", "Exit if price breaks 1.0850",
+                                  "Close gold when it reaches 2680"])
+def test_conditional_close_goes_to_review(text):
+    assert P.parse(text).kind is MessageKind.AMBIGUOUS

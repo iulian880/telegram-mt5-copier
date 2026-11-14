@@ -53,6 +53,9 @@ from tgmt5.risk.sizing import (
 
 log = logging.getLogger(__name__)
 
+#: Telethon "marked" ids of channels and supergroups are <= -1000000000000 ("-100" + id)
+_CHANNEL_ID_FLOOR = -1_000_000_000_000
+
 ACTIVE_LEG_STATES = (LegState.OPEN, LegState.PENDING, LegState.SUBMITTING, LegState.UNCERTAIN)
 REPROCESSABLE_ON_EDIT = (SignalStatus.MANUAL_REVIEW, SignalStatus.WAITING)
 
@@ -300,10 +303,16 @@ class ExecutionEngine:
         return sig.id
 
     def _on_delete(self, msg: TelegramMessage) -> int | None:
+        if msg.source_id:
+            where = [TelegramMessageRow.source_id == msg.source_id]
+        else:
+            # Telegram sends no chat id for deletions in private chats and basic groups. Their
+            # message ids share one per-account sequence, separate from every channel/supergroup
+            # (ids "-100..."), so only those sources can be meant.
+            where = [TelegramMessageRow.source_id > _CHANNEL_ID_FLOOR]
         with self.db.session() as s:
             row = s.scalar(select(TelegramMessageRow).where(
-                TelegramMessageRow.message_id == msg.message_id,
-                *( [TelegramMessageRow.source_id == msg.source_id] if msg.source_id else [])))
+                TelegramMessageRow.message_id == msg.message_id, *where))
             if row is None:
                 return None
             row.deleted = True
@@ -463,8 +472,9 @@ class ExecutionEngine:
         sz = plan_volumes(cfg.risk, positions=positions, tps_covered=covered, allocation=ex.tp_allocation,
                           spec=spec, loss_fn=lambda v: loss_at_stop(gw, spec, direction, v, price, sl)[0],
                           equity=acct.equity, balance=acct.balance, multiplier=mult,
-                          max_total=min(cfg.risk.max_lot_per_order * max(1, len(p.take_profits)),
-                                        cfg.risk.max_lots_per_symbol))
+                          max_total=cfg.risk.max_lots_per_symbol,
+                          max_leg=min(cfg.risk.max_lot_per_order,
+                                      prof.max_lots if prof and prof.max_lots else float("inf")))
         if sz.error:
             d.add("sizing", False, sz.error)
             return self._dummy_plan(spec, broker_sym)

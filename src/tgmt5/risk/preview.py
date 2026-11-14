@@ -115,7 +115,9 @@ def _row(gw, resolver, cfg: AppConfig, ex: ExampleSignal, pv: SizingPreview, acc
         plan = plan_volumes(r, positions=positions, tps_covered=covered, allocation=e.tp_allocation,
                             spec=spec, loss_fn=loss_fn, equity=pv.equity, balance=pv.balance,
                             multiplier=mult,
-                            max_total=min(r.max_lot_per_order * max(1, ex.n_tps), r.max_lots_per_symbol))
+                            max_total=r.max_lots_per_symbol,
+                            max_leg=min(r.max_lot_per_order,
+                                        prof.max_lots if prof and prof.max_lots else float("inf")))
     except SizingError as err:
         row.reason = str(err)
         return row

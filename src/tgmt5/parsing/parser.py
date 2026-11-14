@@ -51,16 +51,43 @@ _PROMO_RE = re.compile(
     r"PIPS\s+SECURED|ANALYSIS|OUTLOOK|PREDICTION)\b")
 
 # --- management ----------------------------------------------------------
+# Follow-up commands act on open trades, so they must be explicit: everyday chat such as
+# "close to TP1", "keep your SL, be patient" or "take only 1% risk" must never match.
+_NEG_RE = re.compile(
+    r"\b(DON['’]?T|DO\s+NOT|NOT|NEVER|NO\s+NEED\s+TO|WON['’]?T|SHOULDN['’]?T|CAN['’]?T|DONT)\b"
+    r"\s+(?:\w+\s+){0,2}?(CLOSE|EXIT|CANCEL|DELETE|REMOVE|MOVE|TAKE|SECURE|BOOK|TOUCH|RISK\s*-?\s*FREE)\b")
 _BE_RE = re.compile(
-    r"(\b(SL|STOP\s*LOSS|STOPS?)\b.*\b(BE|B/E|BREAK\s*-?\s*EVEN|ENTRY|ENTRY\s*PRICE)\b)|\bBREAK\s*-?\s*EVEN\b|\bRISK\s*FREE\b")
+    # "SL to BE", "move stop loss to entry", "SL @ BE", "stops to break-even"
+    r"\b(SL|STOP\s*LOSS|STOPS?)\s*(?:TO|AT|ON|IN|@|=|:|->|→)?\s*"
+    r"(BE|B/E|BREAK\s*-?\s*EVEN|ENTRY(?:\s*PRICE)?)\b"
+    # "move to breakeven", "set break even"
+    r"|\b(MOVE|SET|PUT|PLACE|TRAIL)\b[^.!?\n]{0,20}?\bBREAK\s*-?\s*EVEN\b"
+    # "set risk free", "make it risk-free"
+    r"|\b(SET|MAKE|PUT|GO|MOVE)\b[^.!?\n]{0,15}?\bRISK\s*-?\s*FREE\b")
 _MOD_SL_RE = re.compile(
     rf"\b(MOVE|CHANGE|NEW|UPDATE|ADJUST|SET|MODIFY|TRAIL)\b.*?\b(SL|STOP\s*LOSS)\b\s*(?:TO|AT|@|:|=)?\s*({NUM})")
 _MOD_TP_RE = re.compile(
     rf"\b(MOVE|CHANGE|NEW|UPDATE|ADJUST|SET|MODIFY)\b.*?\b(TP|TAKE\s*PROFIT)\b\s*(?:TO|AT|@|:|=)?\s*({NUM})")
-_PARTIAL_RE = re.compile(rf"\b(CLOSE|SECURE|TAKE|BOOK)\b[^%\n]*?({NUM})\s*%")
+# verb, at most a few words, then the percentage - and not "1% risk" / "2% of your balance"
+_PARTIAL_RE = re.compile(
+    rf"\b(CLOSE|SECURE|TAKE|BOOK)\b(?:\s+[A-Z]+){{0,3}}?\s+({NUM})\s*%"
+    r"(?!\s*(?:RISK|MAX|OF\s+(?:YOUR\s+|THE\s+)?(?:BALANCE|EQUITY|ACCOUNT|CAPITAL|DEPOSIT)))")
 _HALF_RE = re.compile(r"\b(CLOSE|SECURE|TAKE|BOOK)\s+(HALF)\b")
-_CLOSE_RE = re.compile(r"\b(CLOSE|EXIT)\b(\s+(ALL|NOW|TRADES?|POSITIONS?|IT|EVERYTHING|FULL))?")
-_CANCEL_RE = re.compile(r"\b(CANCEL|CANCELLED|DELETE|REMOVE)\b")
+# "close all / now / it / the trade(s) / <symbol>" or a message that starts with CLOSE / EXIT,
+# but never "close to", "close in", "market close"
+_CLOSE_RE = re.compile(
+    r"\b(CLOSE|EXIT)\s+(ALL|NOW|IT|EVERYTHING|FULL(?:Y)?|AT\s+MARKET|EARLY|"
+    r"(?:THE\s+|MY\s+|YOUR\s+|THIS\s+|OUR\s+)?(?:TRADES?|POSITIONS?|ORDERS?))\b"
+    r"|^\W*(?:PLEASE\s+)?(CLOSE|EXIT)\b(?!\s+(?:TO|IN|BY|ENOUGH|CALL|ONE)\b)")
+# "close at 2665", "exit if it breaks 1.0850": a condition the app cannot watch -> manual review
+_COND_CLOSE_RE = re.compile(r"\b(CLOSE|EXIT)\b(?:\s+[A-Z]+){0,3}?\s+(IF|WHEN|ONCE|ABOVE|BELOW|AT\s+\d)")
+_CANCEL_RE = re.compile(
+    r"^\W*(?:PLEASE\s+)?(CANCEL|DELETE|REMOVE)\b"
+    r"(?!\s+(?:THIS\s+|THE\s+|YOUR\s+|OUR\s+)?(?:CHANNEL|GROUP|CHAT|MESSAGE|POST|ACCOUNT|APP|EMOTIONS?))"
+    r"|\b(CANCEL|DELETE|REMOVE)\s+(?:THE\s+|MY\s+|YOUR\s+|THIS\s+|ALL\s+|PREVIOUS\s+)*"
+    r"(?:PENDING|LIMITS?|STOPS?|ORDERS?|ENTRY|ENTRIES|SIGNAL|SETUP|TRADE|BUY|SELL)\b"
+    r"|\b(PENDING|LIMIT|ORDER|SIGNAL|SETUP|ENTRY|TRADE|BUY\s+STOP|SELL\s+STOP)\b[^.!?\n]{0,20}?"
+    r"\b(CANCELL?ED|DELETED|REMOVED)\b")
 _TP_HIT_RE = re.compile(r"\bTP\s*(\d)?\s*(HIT|REACHED|DONE|SMASHED|✅)")
 _SL_HIT_RE = re.compile(r"\b(SL|STOP\s*LOSS)\s*(HIT|REACHED|TRIGGERED)\b")
 
@@ -284,6 +311,8 @@ class SignalParser:
                       tp_index=int(m.group(1)) if m.group(1) else None)
         if _SL_HIT_RE.search(norm):
             return mk(ManagementType.SL_HIT, MessageKind.INFO)
+        if _NEG_RE.search(norm):
+            return None             # "don't close", "do not delete" ...: never act on a negation
         if _CANCEL_RE.search(norm):
             return mk(ManagementType.CANCEL_PENDING)
         if m := _PARTIAL_RE.search(norm):
@@ -301,6 +330,9 @@ class SignalParser:
             return mk(ManagementType.MOVE_SL_BE)
         if m := _MOD_TP_RE.search(norm):
             return mk(ManagementType.MODIFY_TP, price=float(m.group(3)))
+        if _COND_CLOSE_RE.search(norm) and _CLOSE_RE.search(norm):
+            return ParseResult(MessageKind.AMBIGUOUS,
+                               reasons=("conditional close (price or condition) - apply it manually",))
         if _CLOSE_RE.search(norm) and not _PROMO_RE.search(norm):
             return mk(ManagementType.CLOSE_ALL)
         return None
