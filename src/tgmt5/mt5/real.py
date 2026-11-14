@@ -10,6 +10,7 @@ from __future__ import annotations
 import glob
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,16 +44,66 @@ def detect_terminals() -> list[str]:
     return [f for f in found if not (f.lower() in seen or seen.add(f.lower()))]
 
 
+#: brokers run their trade server between UTC-12 and UTC+14
+_MAX_OFFSET = 14 * 3600
+
+
 class RealMT5Gateway:
-    def __init__(self) -> None:
-        try:
-            import MetaTrader5 as mt5  # type: ignore[import-not-found]
-        except ImportError as exc:  # pragma: no cover - platform dependent
-            raise GatewayError(
-                "The MetaTrader5 package is not available. It requires Windows and "
-                "`pip install MetaTrader5`.") from exc
-        self.mt5 = mt5
+    """MetaTrader5 adapter. Every time it returns is real UTC epoch seconds.
+
+    MT5 stamps ticks, positions, orders and deals with the *trade server's* clock (IC Markets:
+    UTC+2, UTC+3 in summer) and interprets history date ranges the same way. The offset is
+    learned from live quotes and removed here, so the rest of the application never sees server
+    time (stale-quote checks, durations and deal look-ups all assume UTC).
+    """
+
+    def __init__(self, module=None) -> None:
+        if module is None:
+            try:
+                import MetaTrader5 as module  # type: ignore[import-not-found,no-redef]
+            except ImportError as exc:  # pragma: no cover - platform dependent
+                raise GatewayError(
+                    "The MetaTrader5 package is not available. It requires Windows and "
+                    "`pip install MetaTrader5`.") from exc
+        self.mt5 = module
         self._connected = False
+        self._offset = 0.0          # trade-server time minus UTC, in seconds
+        self._offset_at = 0.0       # when it was last learned (monotonic)
+
+    # ------------------------------------------------------------ server clock
+    @property
+    def server_offset_seconds(self) -> float:
+        return self._offset
+
+    def _learn_offset(self, server_ts: float) -> None:
+        """Update the offset from a quote time. Offsets are whole half-hours; a quote only counts
+        when it is less than two minutes old under that offset. Stale quotes give a SMALLER
+        candidate, so the largest recent candidate wins; after an hour it is re-learned (DST)."""
+        if not server_ts:
+            return
+        raw = server_ts - time.time()
+        cand = round(raw / 1800) * 1800
+        if abs(raw - cand) > 120 or abs(cand) > _MAX_OFFSET:
+            return
+        now = time.monotonic()
+        if cand > self._offset or not self._offset_at or now - self._offset_at > 3600 \
+                or cand == self._offset:
+            if cand != self._offset:
+                log.info("MT5 trade server clock: UTC%+.1fh", cand / 3600)
+            self._offset, self._offset_at = float(cand), now
+
+    def _calibrate(self) -> None:
+        """Learn the offset from the freshest quote in Market Watch (one call)."""
+        try:
+            syms = self.mt5.symbols_get() or ()
+            latest = max((float(getattr(x, "time", 0) or 0) for x in syms if getattr(x, "visible", True)),
+                         default=0.0)
+            self._learn_offset(latest)
+        except Exception as e:  # noqa: BLE001 - best effort; ticks keep refining it
+            log.warning("could not read the MT5 server clock: %s", e)
+
+    def _utc(self, server_ts: float) -> float:
+        return float(server_ts) - self._offset if server_ts else 0.0
 
     def _err(self, what: str) -> GatewayError:
         code, desc = self.mt5.last_error()
@@ -72,6 +123,7 @@ class RealMT5Gateway:
         if not self.mt5.initialize(**kwargs):
             raise self._err("MT5 initialize")
         self._connected = True
+        self._calibrate()
         acct = self.account_info()
         if acct is None:
             raise self._err("account_info")
@@ -130,7 +182,8 @@ class RealMT5Gateway:
         t = self.mt5.symbol_info_tick(symbol)
         if t is None or (t.bid == 0 and t.ask == 0):
             return None
-        return Tick(bid=t.bid, ask=t.ask, time=float(t.time))
+        self._learn_offset(float(t.time))
+        return Tick(bid=t.bid, ask=t.ask, time=self._utc(t.time))
 
     def calc_profit(self, order_type: int, symbol: str, volume: float, price_open: float,
                     price_close: float) -> float | None:
@@ -149,7 +202,7 @@ class RealMT5Gateway:
             raise self._err("positions_get")
         return [Position(ticket=p.ticket, symbol=p.symbol, type=p.type, volume=p.volume,
                          price_open=p.price_open, price_current=p.price_current, sl=p.sl, tp=p.tp,
-                         profit=p.profit, magic=p.magic, comment=p.comment, time=float(p.time),
+                         profit=p.profit, magic=p.magic, comment=p.comment, time=self._utc(p.time),
                          identifier=p.identifier, swap=p.swap) for p in res]
 
     def orders(self, symbol: str | None = None) -> list[PendingOrder]:
@@ -159,18 +212,19 @@ class RealMT5Gateway:
         return [PendingOrder(ticket=o.ticket, symbol=o.symbol, type=o.type,
                              volume_initial=o.volume_initial, volume_current=o.volume_current,
                              price_open=o.price_open, sl=o.sl, tp=o.tp, magic=o.magic,
-                             comment=o.comment, time_setup=float(o.time_setup),
-                             time_expiration=float(o.time_expiration)) for o in res]
+                             comment=o.comment, time_setup=self._utc(o.time_setup),
+                             time_expiration=self._utc(o.time_expiration)) for o in res]
 
     def history_deals(self, date_from: float, date_to: float) -> list[Deal]:
-        res = self.mt5.history_deals_get(datetime.fromtimestamp(date_from, timezone.utc),
-                                         datetime.fromtimestamp(date_to, timezone.utc))
+        # the terminal reads the range in server time
+        res = self.mt5.history_deals_get(datetime.fromtimestamp(date_from + self._offset, timezone.utc),
+                                         datetime.fromtimestamp(date_to + self._offset, timezone.utc))
         if res is None:
             raise self._err("history_deals_get")
         return [Deal(ticket=d.ticket, order=d.order, position_id=d.position_id, symbol=d.symbol,
                      type=d.type, entry=d.entry, volume=d.volume, price=d.price, profit=d.profit,
                      commission=d.commission, swap=d.swap, magic=d.magic, comment=d.comment,
-                     time=float(d.time)) for d in res]
+                     time=self._utc(d.time)) for d in res]
 
     def send(self, request: TradeRequest) -> TradeResult:
         r = self.mt5.order_send(request.as_dict())

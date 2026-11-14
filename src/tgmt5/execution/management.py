@@ -55,6 +55,11 @@ def resolve_target(s: Session, eng: "ExecutionEngine", msg: TelegramMessage,
             sig = s.get(SignalRow, sig.parent_signal_id)
         if sig is None or sig.kind != MessageKind.NEW_SIGNAL.value:
             return None, "ambiguous: replied-to message is not a trade signal"
+        if bool(sig.is_simulated) != eng.simulated:
+            # paper and real trades are separate books: a reply in one mode must never act on
+            # (or mark as closed) a trade of the other
+            return None, (f"ambiguous: signal #{sig.id} is a {'PAPER' if sig.is_simulated else 'broker'} trade "
+                          f"but the app is in {eng.mode.value} mode - apply it manually")
         if instr.symbol and sig.symbol != instr.symbol:
             return None, f"ambiguous: reply references {sig.symbol} but message names {instr.symbol}"
         if sig.status not in statuses:
@@ -304,7 +309,7 @@ def sync_leg(eng: "ExecutionEngine", s: Session, leg: ExecutionRow,
             leg.volume = pos.volume
             return
         now = eng.clock().timestamp()
-        deals = [d for d in gw.history_deals(now - 86400 * 30, now + 60)
+        deals = [d for d in gw.history_deals(now - 86400 * 30, now + 86400)
                  if d.comment == leg.client_tag and d.entry == 0]
         if deals:
             leg.state, leg.position_ticket = LegState.OPEN.value, deals[0].position_id
@@ -321,7 +326,7 @@ def sync_leg(eng: "ExecutionEngine", s: Session, leg: ExecutionRow,
         return
     # position is gone -> closed (by SL/TP, by us, or manually in the terminal)
     now = eng.clock().timestamp()
-    deals = [d for d in gw.history_deals(now - 86400 * 30, now + 60)
+    deals = [d for d in gw.history_deals(now - 86400 * 30, now + 86400)
              if d.position_id == leg.position_ticket]
     exits = [d for d in deals if d.entry in (1, 2, 3)]
     if exits:
@@ -349,30 +354,42 @@ def manage_open_trades(eng: "ExecutionEngine") -> None:
             SignalRow.is_simulated == eng.simulated,
             SignalRow.status.in_([x.value for x in TRADE_STATUSES]))))
         for sig in sigs:
-            legs = list(sig.executions)
-            for leg in legs:
-                if leg.state == LegState.UNCERTAIN.value:
-                    if not eng._reconcile_leg(s, leg):
-                        leg.state = LegState.FAILED.value
-                        eng.audit_app("WARNING", "reconcile",
-                                      f"{leg.client_tag}: not found at broker - marked FAILED")
-                elif leg.state in (LegState.OPEN.value, LegState.PENDING.value):
-                    was_open = leg.state == LegState.OPEN.value
-                    sync_leg(eng, s, leg, positions, orders)
-                    if was_open and leg.state == LegState.CLOSED.value:
-                        s.add(SignalEventRow(signal_id=sig.id, status_from=sig.status,
-                                             status_to=sig.status, ts=eng.clock(),
-                                             message=f"leg {leg.leg_index} closed, P/L {leg.profit}"))
-            s.flush()
-            # Monitor-only mode (e.g. right after a restart or an update) cannot send orders:
-            # keep tracking the legs but leave breakeven / partials / trailing for later, so they
-            # are applied as soon as execution is switched back on instead of being marked done.
-            if eng.mode is not ExecutionMode.MONITOR:
-                _auto_breakeven(eng, s, sig, legs, ex)
-                _managed_partials(eng, s, sig, legs, ex)
-                if ex.trailing_enabled:
-                    _trail(eng, s, sig, legs, ex)
-            _maybe_close_signal(eng, s, sig, legs)
+            sig_id = sig.id
+            try:
+                _manage_signal(eng, s, sig, positions, orders, ex)
+                # commit per signal: a broker error on one signal must never roll back the record
+                # of closes / SL changes already sent for another (they would be sent again)
+                s.commit()
+            except Exception as e:  # noqa: BLE001
+                s.rollback()
+                eng.audit_app("ERROR", "management", f"signal #{sig_id}: skipped this tick ({e})")
+
+
+def _manage_signal(eng, s, sig, positions, orders, ex) -> None:
+    legs = list(sig.executions)
+    for leg in legs:
+        if leg.state == LegState.UNCERTAIN.value:
+            if not eng._reconcile_leg(s, leg):
+                leg.state = LegState.FAILED.value
+                eng.audit_app("WARNING", "reconcile",
+                              f"{leg.client_tag}: not found at broker - marked FAILED")
+        elif leg.state in (LegState.OPEN.value, LegState.PENDING.value):
+            was_open = leg.state == LegState.OPEN.value
+            sync_leg(eng, s, leg, positions, orders)
+            if was_open and leg.state == LegState.CLOSED.value:
+                s.add(SignalEventRow(signal_id=sig.id, status_from=sig.status,
+                                     status_to=sig.status, ts=eng.clock(),
+                                     message=f"leg {leg.leg_index} closed, P/L {leg.profit}"))
+    s.flush()
+    # Monitor-only mode (e.g. right after a restart or an update) cannot send orders:
+    # keep tracking the legs but leave breakeven / partials / trailing for later, so they
+    # are applied as soon as execution is switched back on instead of being marked done.
+    if eng.mode is not ExecutionMode.MONITOR:
+        _auto_breakeven(eng, s, sig, legs, ex)
+        _managed_partials(eng, s, sig, legs, ex)
+        if ex.trailing_enabled:
+            _trail(eng, s, sig, legs, ex)
+    _maybe_close_signal(eng, s, sig, legs)
 
 
 def _auto_breakeven(eng, s, sig, legs, ex) -> None:
@@ -422,6 +439,8 @@ def _managed_partials(eng, s, sig, legs, ex) -> None:
         ok, msg = close_leg(eng, s, leg, vol, f"managed TP{i + 1}") if vol >= spec.volume_min \
             else (True, "partial below minimum volume - skipped")
         done.append(i)
+        sig.management = {**m, "done": list(done)}
+        s.commit()          # the partial close was sent: record it before anything else can fail
         if i + 1 == ex.move_sl_to_be_after_tp and leg.state == LegState.OPEN.value and not leg.be_applied:
             off = ex.breakeven_offset_points * spec.point
             entry = leg.fill_price or leg.requested_price

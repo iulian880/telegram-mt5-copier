@@ -573,6 +573,10 @@ class AppService:
                 if not approve or sig.kind != MessageKind.NEW_SIGNAL.value or sig.stop_loss is None:
                     self.engine._transition(s, sig, SignalStatus.CANCELLED, "dismissed by user")
                     return SignalStatus.CANCELLED
+                if sig.is_simulated and not self.engine.simulated:
+                    raise ValueError("This signal arrived during PAPER trading: switch to Paper trading "
+                                     "to approve it, or dismiss it.")
+                sig.is_simulated = self.engine.simulated     # it is executed in the CURRENT mode
             return self.engine.process_signal(signal_id, None, from_waiting=False)
         return await self.run_mt5(_do)
 

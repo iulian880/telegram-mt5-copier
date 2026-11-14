@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tgmt5.config import AppConfig, TpStrategy, ZonePolicy
@@ -93,6 +93,9 @@ class ExecutionEngine:
         self._config = config
         self.mode = mode
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        #: after a timed-out send, wait this long and look at the broker AGAIN before retrying:
+        #: the first request may still be in flight, and a premature retry would duplicate it
+        self.uncertain_grace_s = 2.0
         self._emit = emit or (lambda kind, data: None)
         self.gw: MT5Gateway | None = None
         self.resolver: SymbolResolver | None = None
@@ -422,6 +425,14 @@ class ExecutionEngine:
               f"{broker_sym} trading disabled")
         d.add("tick_fresh", now.timestamp() - tick.time < 120 or self.simulated,
               "last price is stale (market closed?)")
+        if not acct.is_hedging:
+            # a netting account keeps ONE position per symbol: a second order would merge into the
+            # first trade and overwrite its SL/TP, so the app holds at most one signal per symbol
+            held = s.scalar(select(func.count(ExecutionRow.id)).where(
+                ExecutionRow.symbol == broker_sym, ExecutionRow.is_simulated == self.simulated,
+                ExecutionRow.state.in_([x.value for x in ACTIVE_LEG_STATES])))
+            d.add("netting", not held, f"netting account: this app already holds {broker_sym}; "
+                                       f"a second signal would merge into that position")
         prof = cfg.risk.symbol_profiles.get(p.symbol)
         sl_dist = abs((p.reference_entry or (tick.ask if p.direction is Direction.BUY else tick.bid))
                       - p.stop_loss)
@@ -661,6 +672,10 @@ class ExecutionEngine:
                     found = self._reconcile_leg(s, leg)
                     if found:
                         return
+                    if self.uncertain_grace_s:
+                        time.sleep(self.uncertain_grace_s)
+                    if self._reconcile_leg(s, leg):
+                        return
                     # Proven absent after reconciliation: optionally retry once with fresh price.
                     if self.cfg.execution.reconcile_retry_once and not retried_uncertain:
                         retried_uncertain = True
@@ -697,7 +712,9 @@ class ExecutionEngine:
     def _mark_leg_success(self, s: Session, leg: ExecutionRow, res: TradeResult,
                           plan: ExecutionPlan) -> None:
         leg.order_ticket = res.order or None
-        if plan.pending and res.retcode == Retcode.PLACED:
+        if plan.pending:
+            # a pending request answers PLACED (10008) on some servers and DONE (10009) on most;
+            # either way the result is a waiting order, not a position
             leg.state = LegState.PENDING.value
             return
         leg.state = LegState.OPEN.value
@@ -710,7 +727,12 @@ class ExecutionEngine:
             leg.slippage_points = round(
                 (leg.fill_price - leg.requested_price) / plan.spec.point *
                 (1 if leg.direction == "BUY" else -1), 1)
-        pos = self._find_position_by_tag(leg.client_tag)
+        try:
+            pos = self._find_position_by_tag(leg.client_tag)
+        except Exception as e:  # noqa: BLE001 - the order IS placed; never lose that fact
+            pos = None
+            self.audit_app("WARNING", "mt5", f"{leg.client_tag}: sent OK but position lookup failed "
+                                             f"({e}); using the order ticket until the next sync")
         leg.position_ticket = pos.ticket if pos else (res.order or None)
         if pos and not leg.fill_price:
             leg.fill_price = pos.price_open
@@ -743,7 +765,7 @@ class ExecutionEngine:
                                    f"{leg.client_tag}: uncertain order found PENDING ({o.ticket})")
                     return True
             now = self.clock().timestamp()
-            deals = [d for d in self.gw.history_deals(now - 86400 * 7, now + 60)
+            deals = [d for d in self.gw.history_deals(now - 86400 * 7, now + 86400)
                      if d.comment == leg.client_tag and d.magic == magic and d.entry == 0]
             if deals:
                 d0 = deals[0]

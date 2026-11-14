@@ -51,6 +51,7 @@ class Harness:
         self.events: list[tuple[str, dict]] = []
         self.engine = ExecutionEngine(self.db, self.gw, self.risk, lambda: self.cfg, mode=mode,
                                       clock=self.clock, emit=lambda k, d: self.events.append((k, d)))
+        self.engine.uncertain_grace_s = 0.0          # keep the suite fast; the second look still runs
         acct = self.broker.account_info()
         self.risk.state.confirmed_account = f"{acct.login}@{acct.server}"
         self.engine.refresh_account()
