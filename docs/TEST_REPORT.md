@@ -1,17 +1,22 @@
 # Test report
 
-Latest run: 2026-11-13 on Windows 11 (Python 3.14.8, PySide6 6.12.0, Telethon 1.45.0, SQLAlchemy 2.1.8, Alembic 1.20.1, Pydantic 2.14.3, PyInstaller 6.22.3).
+Latest run: 2026-11-14 on macOS (Python 3.13, Qt offscreen) for v0.4.0. GitHub Actions runs the same suite on Windows and Ubuntu for Python 3.12-3.14, then builds and smoke-tests the Windows executables.
 
 ```
 $ pytest -q
-214 passed, 1 deselected in 4.6s
+257 passed, 1 deselected in 4.5s
 ```
+
+v0.4.0 added `test_regressions_v040.py` (13 tests) and 30 parser cases. Each reproduces a bug found in the November 2026 review and fails on v0.3.0: chat read as close/BE/partial/cancel commands, pending orders acknowledged with DONE, a management error repeating partial closes, a signal stuck in SUBMITTING, a late order duplicated after a timeout, MT5 server time read as UTC, PAPER replies touching DEMO trades, netting merges, the lot cap on large accounts, risk baselines across accounts, deletions without a chat id, and PAPER mode after a reconnect.
+
+The previous run (v0.3.0, 2026-11-13, Windows 11, Python 3.14.8) gave 214 passed.
 
 The first run, on 2026-11-03, used a Linux CI-style container (Python 3.13, Qt offscreen) and gave 174 passed. Tests added since then: `test_main.py` (portable data folder) `test_sizing_modes.py` (sizing methods, small-account settings, pre-trade review, account-based preview), `test_config_compat.py` (settings saved by v0.1.0 still load) and `test_real_account.py` (REAL ACCOUNT mode: opt-in, typed confirmation, guard on every order, closing positions outside the mode, never imported).
 
 | File | Tests | Covers |
 |---|---|---|
-| `test_parser.py` | 57 | All seven example formats from the spec, aliases, limit/stop, multiple TPs, "TP open", thousands separators, timestamps and lot/risk noise, ambiguous cases (missing SL, wrong-side levels, typos, two symbols, conflicting directions, comma decimals), false positives (promo, results, analysis, past tense, code-like text), management variants |
+| `test_regressions_v040.py` | 13 | The v0.4.0 bug fixes listed above, end to end through the engine, service, risk engine and MT5 adapter |
+| `test_parser.py` | 87 | All seven example formats from the spec, aliases, limit/stop, multiple TPs, "TP open", thousands separators, timestamps and lot/risk noise, ambiguous cases (missing SL, wrong-side levels, typos, two symbols, conflicting directions, comma decimals), false positives (promo, results, analysis, past tense, code-like text), management variants |
 | `test_sizing.py` | 14 | Never rounding up, EURUSD and XAUUSD sizing, non-standard contract size, JPY → USD conversion, tick-value fallback, min volume above budget, max volume and step, fixed lot, multi-TP split never exceeding the total, three TPs never tripling risk |
 | `test_engine.py` | 46 | Full pipeline: duplicates, monitor mode, stale signals, unauthorised or disabled sources, review queue, price moved, wait-for-zone and expiry, zone REJECT/PENDING, explicit limits, spread, TP already reached, broker rejection, partial leg failure, **timeout-but-executed reconciled without a duplicate**, timeout-not-executed single retry, transport exceptions, broker unreachable (stays UNCERTAIN, no retry), filling-mode fallback, **live account blocked plus emergency**, first-execution confirmation, emergency stop, concurrent/total/margin/blacklist/frequency limits, cross-source dedup, broker suffix resolution, edits (fix SL → execute; never re-execute), deletes, daily-loss and drawdown lockouts persisting across restart, consecutive-loss breaker, MT5 instability or disconnect |
 | `test_management.py` | 31 | Reply and context matching, ambiguity → review, BE (+offset, invalid), partial close, close all, modify SL/TP, cancel pending/waiting, TP-hit handling, TP1 → BE automation, trailing stop, netting account managed partials, FIRST_TP_ONLY, small-volume fallback, pending expiry, manual close in the terminal, **recovery** (uncertain found, absent → failed and not resent, crash before send, closed while offline, orphans, waiting expiry, no replay after restart) |
@@ -23,7 +28,7 @@ The first run, on 2026-11-03, used a Linux CI-style container (Python 3.13, Qt o
 
 ## What was NOT verified in this environment
 
-- **The real MetaTrader5 package and terminal.** It is Windows-only. `RealMT5Gateway` is a thin mapping written against the documented API (`initialize`, `account_info`, `symbol_info`, `order_calc_profit`, `order_send`, …) but it was not executed. Run `pytest -m demo_e2e` on Windows to verify it.
+- **The real MetaTrader5 package and terminal.** It is Windows-only. `RealMT5Gateway` is a thin mapping written against the documented API (`initialize`, `account_info`, `symbol_info`, `order_calc_profit`, `order_send`, …) but it was not executed. Its server-time conversion (v0.4.0) is unit-tested with a stand-in module. Run `pytest -m demo_e2e` on Windows to verify it.
 - **The real Telegram network.** The login flow, `iter_dialogs`, event delivery and reconnect behaviour of the live Telethon client were not exercised; only the adapter's event handling was tested, with stub events.
 - **IC Markets-specific behaviour.** Symbol names, filling modes, stops levels and whether order comments are preserved all come from the terminal at runtime. Reconciliation depends on the broker keeping the order comment (client tag). If a broker overwrote comments, an uncertain order would be marked FAILED and the position would appear as an "orphan" (magic number match) in the recovery report, so it would be flagged rather than duplicated.
 - **Packaging, verified on Windows on 2026-11-13.** The PyInstaller build, the Inno Setup installer and the portable single-file build all built and were signed (self-signed certificate). The installer passed a silent install and uninstall. The portable build ran in `--sandbox` mode with its data next to the `.exe` and no errors in the log. The installer's interactive wizard pages were not walked through by an automated test.
@@ -32,7 +37,7 @@ The first run, on 2026-11-03, used a Linux CI-style container (Python 3.13, Qt o
 ## Known limitations
 
 - Paper-trading positions are rebuilt from the database after a restart, but SL/TP hits that happen *while the app is closed* are not simulated for paper trades.
-- Deletion events from basic (non-super) groups carry no chat ID. They are matched by message ID across sources.
+- Deletion events from private chats and basic (non-super) groups carry no chat ID. They are matched by message ID against private and basic-group sources only (never channels).
 - The parser is English-oriented. Providers with unusual formats need aliases or the `implicit_market` template, or their messages end up in manual review.
 - Correlation groups are user-defined lists, not computed correlations.
 - The daily loss lockout uses UTC days.

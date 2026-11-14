@@ -33,12 +33,14 @@ jobs:
         run: |
           $v = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
           "version=$v" >> $env:GITHUB_OUTPUT
-      - name: Tools (Inno Setup, test signing certificate)
+      - name: Tools (Inno Setup, Python venv)
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
           python -m venv .venv
-          & packaging\new_dev_cert.ps1
+      - name: Self-signed test certificate (same as local builds; Windows does not trust it)
+        shell: powershell
+        run: '& packaging\new_dev_cert.ps1'
       - name: Test + build one-folder app
         shell: pwsh
         run: packaging\build_windows.ps1
