@@ -38,7 +38,7 @@ Python 3.12+ desktop app (PySide6 + qasync) that parses Telegram signals and pla
 
 ## UI and design
 - Tokens: `src/tgmt5/ui/theme.py` (`Palette`, `DARK`/`LIGHT`, the QSS built in `stylesheet()`).
-- Design system, once generated: `design-system/tgmt5/MASTER.md`, the single source for visual decisions. `ui-ux-pro-max` has no PySide6/Qt stack: use only its `--design-system` and `--domain` searches (no `--stack`), describe the app as a PySide6 desktop trading tool, and save with `--persist --output-dir <repo root>`.
+- Design system, once generated: `design-system/tgmt5/MASTER.md`, the single source for visual decisions. `ui-ux-pro-max` has no PySide6/Qt stack: use only its `--design-system` and `--domain` searches (no `--stack`), describe the app as a PySide6 desktop trading tool in the query text, and save with `--design-system -p tgmt5 --persist --output-dir <repo root>` (without `-p` the folder is named after the query).
 
 ## Local third-party skills (not in git, excluded via `.git/info/exclude`)
 - `.claude/skills/ui-ux-pro-max`: nextlevelbuilder/ui-ux-pro-max-skill, tag v2.15.0, commit a38d04c. Local patch on 11 lines of SKILL.md: `python "${CLAUDE_PLUGIN_ROOT}/.claude/skills/ui-ux-pro-max` → `python3 "${CLAUDE_SKILL_DIR}`. Uninstall: delete the folder.
