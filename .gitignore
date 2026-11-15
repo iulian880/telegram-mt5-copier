@@ -13,6 +13,9 @@ dist/
 *.log
 config.local.json
 .env
+.env.*
+*.pfx
+*.p12
 /secrets*
 *.secret
 .secrets/
