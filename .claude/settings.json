@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(**/*.session)",
+      "Edit(**/*.session)",
+      "Read(**/*.pfx)",
+      "Edit(**/*.pfx)",
+      "Write(**/*.pfx)",
+      "Read(**/*.p12)",
+      "Edit(**/*.p12)",
+      "Write(**/*.p12)",
+      "Read(**/config.local.json)",
+      "Edit(**/config.local.json)",
+      "Read(/secrets*)",
+      "Read(**/.secrets/**)",
+      "Read(**/*.secret)",
+      "Bash(git push origin main)",
+      "Bash(git push origin main *)",
+      "Bash(git push origin HEAD:main*)",
+      "Bash(gh release delete *)"
+    ]
+  }
+}
